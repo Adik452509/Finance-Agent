@@ -1,0 +1,22 @@
+# --- Config & secrets ---
+python-dotenv==1.1.1
+pydantic==2.11.7
+pydantic-settings==2.10.1
+
+# --- LLM providers (pick via LLM_PROVIDER in .env) ---
+langchain-core==0.3.72
+langchain-google-genai==2.1.9
+langchain-openai==0.3.28
+langchain-groq==0.3.6
+langchain-anthropic==0.3.17
+
+# --- Market data ---
+yfinance==0.2.65
+
+# --- RAG (Phase 1) ---
+pypdf==5.9.0
+chromadb==1.0.15
+
+# --- Dev ---
+pytest==8.4.1
+rich==14.1.0
