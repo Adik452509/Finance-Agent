@@ -21,9 +21,11 @@ Provider = Literal["gemini", "openai", "groq", "anthropic"]
 # "default" = cheap workhorse (Planner, Researcher, Writer)
 # "reasoning" = stronger/pricier, used sparingly (Analyst, Critic)
 MODEL_MAP: dict[str, dict[str, str]] = {
+    # Free tier has no Pro quota (limit 0), so both roles use Flash.
+    # On a paid key, set REASONING_MODEL_OVERRIDE=gemini-3.1-pro-preview in .env.
     "gemini": {
-        "default": "gemini-2.5-flash",
-        "reasoning": "gemini-2.5-pro",
+        "default": "gemini-3.8-flash",
+        "reasoning": "gemini-3.8-flash",
     },
     "openai": {
         "default": "gpt-4o-mini",
