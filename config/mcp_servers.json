@@ -1,0 +1,14 @@
+{
+  "servers": {
+    "market": {
+      "module": "src.mcp_servers.market_server",
+      "description": "Live stock prices and quarterly financials (Yahoo Finance)",
+      "enabled": true
+    },
+    "filings": {
+      "module": "src.mcp_servers.filings_server",
+      "description": "Semantic search over indexed annual reports (RAG)",
+      "enabled": true
+    }
+  }
+}
