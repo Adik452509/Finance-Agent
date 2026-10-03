@@ -32,8 +32,8 @@ MODEL_MAP: dict[str, dict[str, str]] = {
         "reasoning": "gpt-4o",
     },
     "groq": {
-        "default": "llama-3.3-70b-versatile",
-        "reasoning": "llama-3.3-70b-versatile",
+        "default": "openai/gpt-oss-20b",
+        "reasoning": "openai/gpt-oss-120b",
     },
     "anthropic": {
         "default": "claude-haiku-4-5-20251001",
