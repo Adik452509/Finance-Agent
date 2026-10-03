@@ -38,11 +38,11 @@ def test_citations_parsed_in_both_styles():
 
 def test_fullwidth_citations_from_gpt_oss_are_recognised(retriever):
     # Groq's gpt-oss writes 【S1】 and narrow no-break spaces inside figures.
-    llm = fake_llm("Total net sales were **$416,161 million**【S1】.")
+    llm = fake_llm("Total net sales were **$416,161\u202fmillion**【S1】.")
     result = answer_question("Apple total net sales", retriever=retriever, llm=llm, aliases=ALIASES)
     assert result.cited == [1]
     assert result.warnings == []
-    assert "[S1]" in result.text and " " not in result.text
+    assert "[S1]" in result.text and "\u202f" not in result.text
 
 
 def test_citation_to_missing_source_flagged():

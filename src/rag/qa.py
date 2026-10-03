@@ -113,9 +113,9 @@ def normalize_answer(text: str) -> str:
     """Even out model-specific formatting so citation checks work for every provider.
 
     gpt-oss models (Groq) cite as 【S1】 and put narrow no-break spaces inside
-    figures ("416,161 million"); Gemini uses [S1] and plain spaces.
+    figures ("416,161\u202fmillion"); Gemini uses [S1] and plain spaces.
     """
-    for odd, plain in (("【", "["), ("】", "]"), ("［", "["), ("］", "]"), (" ", " "), (" ", " ")):
+    for odd, plain in (("【", "["), ("】", "]"), ("［", "["), ("］", "]"), ("\u202f", " "), ("\u00a0", " ")):
         text = text.replace(odd, plain)
     return text.strip()
 
