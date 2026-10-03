@@ -9,6 +9,7 @@ Every other module does `from config.settings import settings` so that:
 from pathlib import Path
 from typing import Literal
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # settings.py lives in <project>/config/, so the root is two levels up.
@@ -85,6 +86,30 @@ class Settings(BaseSettings):
     data_dir: Path = PROJECT_ROOT / "data"
     raw_dir: Path = PROJECT_ROOT / "data" / "raw"
     chroma_dir: Path = PROJECT_ROOT / "data" / "chroma"
+    documents_registry: Path = PROJECT_ROOT / "config" / "documents.json"
+
+    # --- RAG -----------------------------------------------------------------
+    # Changing the embedding model makes existing vectors incomparable:
+    # delete data/chroma and re-run ingestion after any change here.
+    embedding_model: str = "models/gemini-embedding-001"
+    chroma_collection: str = "filings"  # Chroma requires 3-512 chars
+    # Characters, not tokens. Tuned against real questions in Phase 1 step 6.
+    chunk_size: int = 2000
+    chunk_overlap: int = 300
+    # Gemini free tier allows 100 embeddings/minute; stay safely below it.
+    embed_batch_size: int = 90
+
+    @model_validator(mode="after")
+    def _check_chunking(self) -> "Settings":
+        # Overlap >= size would make the chunker never advance (infinite loop).
+        if not 0 <= self.chunk_overlap < self.chunk_size:
+            raise ValueError(
+                f"CHUNK_OVERLAP ({self.chunk_overlap}) must be >= 0 and smaller than "
+                f"CHUNK_SIZE ({self.chunk_size})."
+            )
+        if not 1 <= self.embed_batch_size <= 100:
+            raise ValueError("EMBED_BATCH_SIZE must be between 1 and 100 (Gemini batch limit).")
+        return self
 
     # --- Derived values ----------------------------------------------------
 
