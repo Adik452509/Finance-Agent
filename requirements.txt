@@ -17,6 +17,17 @@ yfinance==0.2.65
 pypdf==5.9.0
 chromadb==1.0.15
 
+# --- Tools & agents (Phase 2) ---
+# These pins are tighter than pip would choose, on purpose. Package metadata
+# here is wrong in both directions:
+#  - langchain-mcp-adapters 0.2.x claims langchain-core>=0.3.36 but imports
+#    langchain_core.messages.content (core 1.x only). 0.1.14 imports cleanly.
+#  - adapters allow mcp>=1.9.2 with no ceiling, so pip pairs them with mcp 2.x,
+#    a major version released after them. Stay on mcp 1.x.
+mcp==1.30.0
+langchain-mcp-adapters==0.1.14
+langgraph==1.0.1
+
 # --- Dev ---
 pytest==8.4.1
 rich==14.1.0
