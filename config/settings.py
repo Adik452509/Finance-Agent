@@ -96,8 +96,13 @@ class Settings(BaseSettings):
     # Characters, not tokens. Tuned against real questions in Phase 1 step 6.
     chunk_size: int = 2000
     chunk_overlap: int = 300
-    # Gemini free tier allows 100 embeddings/minute; stay safely below it.
+    # Gemini free tier limits embeddings per minute two ways, so one batch is
+    # sent per minute, capped by BOTH:
+    #   - 100 texts/minute            -> at most embed_batch_size texts
+    #   - tokens/minute (measured: ~55k chars passed, ~117k failed)
+    #                                 -> at most embed_chars_per_minute chars
     embed_batch_size: int = 90
+    embed_chars_per_minute: int = 50_000
 
     @model_validator(mode="after")
     def _check_chunking(self) -> "Settings":
@@ -109,6 +114,9 @@ class Settings(BaseSettings):
             )
         if not 1 <= self.embed_batch_size <= 100:
             raise ValueError("EMBED_BATCH_SIZE must be between 1 and 100 (Gemini batch limit).")
+        # A batch must fit at least one full chunk (plus its repeated header).
+        if self.embed_chars_per_minute < self.chunk_size + 500:
+            raise ValueError("EMBED_CHARS_PER_MINUTE must exceed CHUNK_SIZE + 500.")
         return self
 
     # --- Derived values ----------------------------------------------------

@@ -10,7 +10,6 @@ Exits with code 0 when every chunk is indexed, 1 if the run stopped early.
 
 import argparse
 import logging
-import math
 import sys
 import warnings
 from collections import Counter
@@ -21,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from config.settings import settings  # noqa: E402
 from src.ingestion.chunker import chunk_pages  # noqa: E402
-from src.ingestion.indexer import get_collection, index_chunks  # noqa: E402
+from src.ingestion.indexer import get_collection, index_chunks, make_batches  # noqa: E402
 from src.ingestion.loader import load_all  # noqa: E402
 
 warnings.filterwarnings("ignore", message=".*Timestamp.utcnow.*")
@@ -47,10 +46,11 @@ def main() -> int:
         # Opening the collection reads state but embeds nothing.
         collection = get_collection()
         stored = set(collection.get(ids=[c.id for c in chunks], include=[])["ids"])
-        todo = len(chunks) - len(stored)
-        batches = math.ceil(todo / settings.embed_batch_size)
-        print(f"\nAlready indexed: {len(stored)}   To embed: {todo}   "
-              f"Estimated time: ~{batches} min ({batches} batches of {settings.embed_batch_size})")
+        todo = [c for c in chunks if c.id not in stored]
+        batches = make_batches(todo)
+        print(f"\nAlready indexed: {len(stored)}   To embed: {len(todo)}   "
+              f"Estimated time: ~{len(batches)} min ({len(batches)} batches, "
+              f"<= {settings.embed_batch_size} chunks and <= {settings.embed_chars_per_minute:,} chars each)")
         return 0
 
     collection = get_collection(reset=args.reset)

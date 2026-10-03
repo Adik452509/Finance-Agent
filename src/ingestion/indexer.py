@@ -3,8 +3,10 @@
 Pipeline position:  PDF  ->  loader  ->  chunker  ->  [indexer]  ->  Chroma
 
 Why it is built this way:
-  - Gemini's free tier allows 100 embeddings per minute, so chunks go out in
-    batches of `settings.embed_batch_size`, at most one batch per minute.
+  - Gemini's free tier caps embeddings per minute by count (100 texts) AND by
+    tokens. One batch goes out per minute, sized to fit both limits
+    (`embed_batch_size` texts, `embed_chars_per_minute` characters). A batch
+    over the token budget can never succeed, however long you wait.
   - Every batch is written to Chroma immediately. If the run stops (daily
     quota, network, Ctrl+C), nothing already embedded is lost.
   - Chunk IDs are stable, so a re-run skips everything already stored and
@@ -93,6 +95,26 @@ def remove_stale(collection: Collection, chunks: list[Chunk]) -> int:
     return removed
 
 
+def make_batches(chunks: list[Chunk]) -> list[list[Chunk]]:
+    """Group chunks into per-minute batches within both free-tier limits."""
+    max_texts = settings.embed_batch_size
+    max_chars = settings.embed_chars_per_minute
+
+    batches: list[list[Chunk]] = []
+    current: list[Chunk] = []
+    current_chars = 0
+    for chunk in chunks:
+        size = len(chunk.embedding_text)
+        if current and (len(current) >= max_texts or current_chars + size > max_chars):
+            batches.append(current)
+            current, current_chars = [], 0
+        current.append(chunk)
+        current_chars += size
+    if current:
+        batches.append(current)
+    return batches
+
+
 def _is_rate_limit(error: Exception) -> bool:
     text = str(error)
     return "429" in text or "RESOURCE_EXHAUSTED" in text or "quota" in text.lower()
@@ -119,9 +141,8 @@ def _embed_with_retry(texts: list[str]) -> list[list[float]]:
     raise AssertionError("unreachable")
 
 
-def index_chunks(chunks: list[Chunk], collection: Collection, batch_size: int | None = None) -> IndexReport:
+def index_chunks(chunks: list[Chunk], collection: Collection) -> IndexReport:
     """Embed and store every chunk not already in the collection."""
-    batch_size = batch_size or settings.embed_batch_size
     report = IndexReport(total=len(chunks))
     report.removed_stale = remove_stale(collection, chunks)
 
@@ -132,8 +153,9 @@ def index_chunks(chunks: list[Chunk], collection: Collection, batch_size: int | 
         logger.info("Nothing to embed: all %d chunks already indexed", len(chunks))
         return report
 
-    batches = [todo[i:i + batch_size] for i in range(0, len(todo), batch_size)]
-    logger.info("Embedding %d chunks in %d batches (~%d min)", len(todo), len(batches), len(batches))
+    batches = make_batches(todo)
+    logger.info("Embedding %d chunks in %d batches (~%d min, one batch per minute)",
+                len(todo), len(batches), len(batches))
 
     for n, batch in enumerate(batches, start=1):
         started = time.monotonic()
