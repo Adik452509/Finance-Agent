@@ -1,0 +1,32 @@
+[
+  {
+    "file": "10K-Q4-2025-as-filed.pdf",
+    "company": "Apple Inc.",
+    "ticker": "AAPL",
+    "market": "USA",
+    "doc_type": "10-K",
+    "fiscal_year_end": "2025-09-27",
+    "currency": "USD",
+    "reporting_unit": "USD millions"
+  },
+  {
+    "file": "RIL-Integrated-Annual-Report-2024-25.pdf",
+    "company": "Reliance Industries Limited",
+    "ticker": "RELIANCE.NS",
+    "market": "India",
+    "doc_type": "Annual Report",
+    "fiscal_year_end": "2025-03-31",
+    "currency": "INR",
+    "reporting_unit": "INR crore"
+  },
+  {
+    "file": "20-F_202603_final.pdf",
+    "company": "Toyota Motor Corporation",
+    "ticker": "7203.T",
+    "market": "Japan",
+    "doc_type": "20-F",
+    "fiscal_year_end": "2026-03-31",
+    "currency": "JPY",
+    "reporting_unit": "JPY millions"
+  }
+]
