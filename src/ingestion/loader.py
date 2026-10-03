@@ -125,6 +125,9 @@ def check_raw_dir(docs: list[DocumentMeta], raw_dir: Path | None = None) -> None
 def normalize_text(text: str, currency: str) -> str:
     """Fix extraction artefacts without changing any figures."""
     text = text.replace(" ", " ").replace("\t", " ")
+    # Dot leaders in tables ("Sales revenues ........ 43,787,709") are noise.
+    # 4+ dots only, so a real ellipsis "..." survives.
+    text = re.sub(r"\.{4,}", " ", text)
 
     if currency == "INR":
         # The rupee sign is extracted as "C" or "`" in Reliance's fonts.
