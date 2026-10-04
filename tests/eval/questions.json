@@ -1,0 +1,97 @@
+{
+  "description": "Phase 1 accuracy set. Every expected value was read from the indexed filing text; 'pages' are PDF pages where the answer appears.",
+  "questions": [
+    {
+      "id": "aapl_net_sales_2025",
+      "question": "What were Apple's total net sales in fiscal 2025?",
+      "expect": {"type": "figure", "any_of": ["416,161"], "pages": [32, 26, 39, 50, 51]}
+    },
+    {
+      "id": "aapl_net_income_2025",
+      "question": "What was Apple's net income for fiscal 2025?",
+      "expect": {"type": "figure", "any_of": ["112,010"], "must_not": ["93,736"], "pages": [32]}
+    },
+    {
+      "id": "aapl_services_2024_older_column",
+      "question": "What were Apple's Services net sales in fiscal 2024?",
+      "expect": {"type": "figure", "any_of": ["96,169"], "must_not": ["109,158"], "pages": [32, 26, 39]},
+      "notes": "Asks for the OLDER column; 109,158 is fiscal 2025."
+    },
+    {
+      "id": "aapl_rnd_2025",
+      "question": "How much did Apple spend on research and development in fiscal 2025?",
+      "expect": {"type": "figure", "any_of": ["34,550"], "pages": [32, 50]}
+    },
+    {
+      "id": "aapl_headquarters",
+      "question": "Where are Apple's principal executive offices?",
+      "expect": {"type": "text", "any_of": ["Apple Park"], "pages": [1]}
+    },
+    {
+      "id": "ril_revenue_2025_segment_trap",
+      "question": "What was Reliance's consolidated revenue from operations in 2024-25?",
+      "expect": {"type": "figure", "any_of": ["9,80,136"], "must_not": ["6,05,006"], "pages": [100, 116, 130]},
+      "notes": "Trap: 6,05,006 is only the O2C segment (first column of the segment table on p130)."
+    },
+    {
+      "id": "ril_revenue_2024_older_column",
+      "question": "What was Reliance's consolidated revenue from operations in 2023-24?",
+      "expect": {"type": "figure", "any_of": ["9,14,472"], "must_not": ["9,80,136", "5,43,907"], "pages": [100, 116, 130]},
+      "notes": "p100 row reads 'Revenue from Operations 25 9,80,136 9,14,472': 25 is a note ref, 2023-24 is the SECOND figure."
+    },
+    {
+      "id": "ril_total_assets_2025",
+      "question": "What were Reliance's consolidated total assets as at 31st March 2025?",
+      "expect": {"type": "figure", "any_of": ["19,50,121"], "must_not": ["17,55,986"], "pages": [99]}
+    },
+    {
+      "id": "ril_profit_2025",
+      "question": "What was Reliance's consolidated profit for the year 2024-25?",
+      "expect": {"type": "figure", "any_of": ["81,309", "69,648"], "pages": [100]},
+      "notes": "81,309 = total profit; 69,648 = attributable to owners. Either is acceptable if labelled."
+    },
+    {
+      "id": "ril_retail_segment_2025",
+      "question": "What was the revenue from operations of Reliance's Retail segment in 2024-25?",
+      "expect": {"type": "figure", "any_of": ["2,91,043", "2,86,972"], "must_not": ["6,05,006", "9,80,136"], "pages": [130, 7, 116]},
+      "notes": "2,91,043 = segment revenue (p130 segment table, p7 Retail section). 2,86,972 = Retail line of Note 25 'Disaggregated Revenue' (p116). Both are real filing figures; 2,91,043 is the precise answer for 'segment'."
+    },
+    {
+      "id": "toy_revenue_2026_older_first",
+      "question": "What were Toyota's total sales revenues for the fiscal year ended March 31, 2026?",
+      "expect": {"type": "figure", "any_of": ["50,684,952"], "must_not": ["45,095,325", "48,036,704"], "pages": [164, 84, 87, 90, 184, 185, 236]},
+      "notes": "Toyota lists the OLDEST year first: 2024, 2025, 2026."
+    },
+    {
+      "id": "toy_revenue_2025_middle_column",
+      "question": "What were Toyota's total sales revenues for the fiscal year ended March 31, 2025?",
+      "expect": {"type": "figure", "any_of": ["48,036,704"], "must_not": ["50,684,952", "45,095,325"], "pages": [164, 90, 185, 236]}
+    },
+    {
+      "id": "toy_operating_income_2026",
+      "question": "What was Toyota's operating income for the fiscal year ended March 31, 2026?",
+      "expect": {"type": "figure", "any_of": ["3,766,216"], "must_not": ["5,352,934", "4,795,586"], "pages": [164]}
+    },
+    {
+      "id": "toy_headquarters",
+      "question": "Where are Toyota's principal executive offices located?",
+      "expect": {"type": "text", "any_of": ["Toyota City"], "pages": [1, 12]}
+    },
+    {
+      "id": "nf_toyota_antarctica",
+      "question": "How many stores does Toyota operate in Antarctica?",
+      "expect": {"type": "not_found"}
+    },
+    {
+      "id": "nf_apple_future_year",
+      "question": "What were Apple's total net sales in fiscal 2030?",
+      "expect": {"type": "not_found"},
+      "notes": "Future year: must not answer with the fiscal 2025 figure."
+    },
+    {
+      "id": "nf_reliance_moon",
+      "question": "What revenue did Reliance earn from operations on the Moon in 2024-25?",
+      "expect": {"type": "not_found"}
+    }
+  ]
+}

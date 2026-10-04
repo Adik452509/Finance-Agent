@@ -18,6 +18,7 @@ data/raw/*
 data/chroma/*
 !data/raw/.gitkeep
 !data/chroma/.gitkeep
+data/cache/
 *.db
 *.sqlite3
 

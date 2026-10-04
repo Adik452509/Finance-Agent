@@ -96,8 +96,11 @@ class Retriever:
             ticker: restrict to one company ("AAPL") or several (["AAPL", "7203.T"]).
                 The filter is applied BEFORE ranking, so you always get the best
                 k chunks of that company - never zero because others ranked higher.
-            min_score: drop chunks below this similarity. Returning nothing is
-                better than handing the LLM irrelevant text to "answer" from.
+            min_score: drop chunks below this similarity. Off by default: in the
+                Phase 1 eval (scripts/run_eval.py) relevant passages scored 0.70-0.83
+                while the best match for unanswerable questions scored 0.72-0.79, so
+                with gemini-embedding-001 no cutoff separates them. Refusals are
+                handled by the LLM's NOT_FOUND rule instead (3/3 in every eval run).
         """
         query = self._clean_query(query)
         if not 1 <= k <= MAX_K:

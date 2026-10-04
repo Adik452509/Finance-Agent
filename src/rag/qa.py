@@ -35,9 +35,16 @@ Rules:
    or units unless the question asks for it.
 4. Always say which period a figure belongs to. Tables list several years side by side and
    the column order differs between companies - use the "[Table context ...]" line or the
-   table's own header to decide which column is which year. If you cannot tell, say so
-   instead of guessing.
+   table's own header to decide which column is which year. Match the numbers in a row to
+   the column headers IN ORDER: header "Notes 2024-25 2023-24" with row
+   "Revenue from Operations 25 9,80,136 9,14,472" means note 25, 2024-25 = 9,80,136 and
+   2023-24 = 9,14,472. A small number right after the label is usually a note reference,
+   not a value. If you cannot tell which column is which, say so instead of guessing.
 5. If a figure is consolidated (whole group) or standalone (parent company only), say which.
+   For company-wide figures, prefer the primary financial statements (income statement /
+   statement of profit and loss, balance sheet, cash flow statement) over notes and segment
+   tables. In a segment table each column is one segment and the company total is the
+   "Total" column, usually the last one: never present one segment's figure as the company total.
 6. If you calculate something (e.g. growth %), show the input figures with their citations
    and the formula.
 7. If the sources do not contain the answer, reply with exactly: {NOT_FOUND_TOKEN}
