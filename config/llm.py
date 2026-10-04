@@ -60,7 +60,10 @@ def get_chat_model(role: Role = "default", temperature: float = 0.0) -> BaseChat
     if provider == "groq":
         from langchain_groq import ChatGroq
 
-        return ChatGroq(model=model, api_key=api_key, temperature=temperature)
+        # Free tier: 8,000 tokens/minute per model. An agent turn with search results can
+        # exceed that in one burst. The Groq client honours the API's retry-after header,
+        # so extra retries mean "wait for the window to reset" rather than fail.
+        return ChatGroq(model=model, api_key=api_key, temperature=temperature, max_retries=6)
 
     if provider == "anthropic":
         from langchain_anthropic import ChatAnthropic

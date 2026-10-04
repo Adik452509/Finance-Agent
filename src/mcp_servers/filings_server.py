@@ -71,20 +71,24 @@ def _safe(tool_name: str, compute: Callable[[], dict]) -> dict:
         return {"ok": False, "error_type": "upstream_error", "error": f"{type(e).__name__}: {text[:200]}"}
 
 
-def _passage(n: int, hit: Any) -> dict:
+def source_id(hit: Any) -> str:
+    """Stable label like 'RELIANCE.NS p99': unique across searches, unlike S1/S2, so an
+    agent that searches several times can't produce ambiguous citations."""
+    return f"{hit.metadata.get('ticker')} p{hit.metadata.get('page')}"
+
+
+def _passage(hit: Any) -> dict:
+    """One search result. Kept lean: every field costs LLM tokens on every call, and the
+    citation already names company, document type, fiscal year and page."""
     m = hit.metadata
     return {
-        "source_id": f"S{n}",
+        "source_id": source_id(hit),
         "citation": hit.citation(),
-        "score": hit.score,
-        "company": m.get("company"),
         "ticker": m.get("ticker"),
-        "doc_type": m.get("doc_type"),
         "fiscal_year_end": m.get("fiscal_year_end"),
         "reporting_unit": m.get("reporting_unit"),
-        "page": m.get("page"),
-        "page_label": m.get("page_label"),
-        "chunk_id": hit.id,
+        "score": hit.score,
+        "chunk_id": hit.id,  # lets a later checker re-read the exact passage
         "text": hit.text,
     }
 
@@ -104,7 +108,7 @@ def search_filings(query: str, ticker: str | None = None, k: int = 5) -> dict:
             Call list_filings to see which companies are available.
         k: number of passages to return, 1-10 (default 5).
 
-    Each passage has a `source_id` (S1, S2...) to cite, its `reporting_unit`
+    Each passage has a `source_id` (e.g. "7203.T p164") to cite in brackets, its `reporting_unit`
     (e.g. "INR crore", "USD millions") and `fiscal_year_end`. Tables list several
     years side by side - use the "[Table context ...]" line or the table header
     to tell which column is which year. An empty result means the filings don't
@@ -118,7 +122,7 @@ def search_filings(query: str, ticker: str | None = None, k: int = 5) -> dict:
             "ok": True,
             "query": query,
             "ticker": ticker,
-            "results": [_passage(i, h) for i, h in enumerate(hits, start=1)],
+            "results": [_passage(h) for h in hits],
             "note": UNTRUSTED_NOTE,
         }
         if not hits:

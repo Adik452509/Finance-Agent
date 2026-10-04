@@ -13,6 +13,8 @@ Each question is checked on three things:
 
 Question embeddings are cached in data/cache/, so re-running after a prompt or
 model change costs no embedding quota - only the first run of a new question does.
+LLM cost is NOT cached: one full run is ~100k tokens, i.e. half of Groq's free
+200k tokens/day for that model. Use --only to re-check a few questions cheaply.
 Exits 0 only if every answer check passes.
 """
 
