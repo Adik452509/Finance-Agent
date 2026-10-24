@@ -8,6 +8,8 @@ import chromadb
 import pytest
 from chromadb.config import Settings as ChromaSettings
 from langchain_core.embeddings import Embeddings
+from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+from langchain_core.messages import AIMessage
 
 from src.rag.retriever import Retriever
 
@@ -37,6 +39,33 @@ class FakeEmbeddings(Embeddings):
     def embed_query(self, text: str) -> list[float]:
         self.query_calls += 1
         return self._vector(text)
+
+
+class ScriptedModel(GenericFakeChatModel):
+    """Fake chat model for agent tests: replays scripted replies, accepts bound tools,
+    and records every conversation it was sent (in `seen`)."""
+
+    seen: list = []
+
+    def bind_tools(self, tools, **kwargs):
+        return self
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+        self.seen.append(list(messages))
+        return super()._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
+
+
+def scripted(*replies) -> ScriptedModel:
+    """ScriptedModel with its own history list (pydantic would otherwise share the default)."""
+    model = ScriptedModel(messages=iter(replies))
+    model.seen = []
+    return model
+
+
+def tool_call(name: str, args: dict, call_id: str = "c1", tokens: int = 0) -> AIMessage:
+    usage = {"input_tokens": tokens, "output_tokens": 0, "total_tokens": tokens} if tokens else None
+    return AIMessage(content="", tool_calls=[{"name": name, "args": args, "id": call_id, "type": "tool_call"}],
+                     usage_metadata=usage)
 
 
 def _meta(ticker: str, company: str, doc_type: str, fy: str, unit: str, page: int, label: str | None) -> dict:

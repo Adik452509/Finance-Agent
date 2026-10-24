@@ -28,6 +28,7 @@ from langchain_core.tools import BaseTool
 from langgraph.errors import GraphRecursionError
 
 from src.agents.prompts import SINGLE_AGENT_PROMPT
+from src.agents.toolloop import parse_tool_result
 from src.observability.guardrails import with_disclaimer
 from src.rag.qa import FIGURE_RE, YEAR_RE, _message_text, normalize_answer
 
@@ -75,17 +76,6 @@ def build_single_agent(tools: list[BaseTool], llm: BaseChatModel | None = None):
         # The deprecation fires when the agent is built (not at import); accepted until Phase 4.
         warnings.simplefilter("ignore")
         return create_react_agent(llm, tools, prompt=SINGLE_AGENT_PROMPT, name="single_agent")
-
-
-def _parse_tool_result(content: Any) -> tuple[bool | None, str | None]:
-    """Our tools return JSON with ok/error; read it without trusting it."""
-    try:
-        data = json.loads(_message_text(content))
-    except (json.JSONDecodeError, TypeError):
-        return None, None
-    if isinstance(data, dict) and "ok" in data:
-        return bool(data["ok"]), (data.get("error") if not data["ok"] else None)
-    return None, None
 
 
 def _has_figures(text: str) -> bool:
@@ -152,7 +142,7 @@ async def run_agent(agent, question: str, on_event: Callable[[str, Any], None] |
                     elif isinstance(msg, ToolMessage):
                         call, started = pending.pop(msg.tool_call_id, (None, None))
                         if call is not None:
-                            call.ok, call.error = _parse_tool_result(msg.content)
+                            call.ok, call.error = parse_tool_result(msg.content)
                             call.seconds = time.monotonic() - started
                             if call.name == "search_filings" and call.ok:
                                 _collect_citations(msg.content, citations)
