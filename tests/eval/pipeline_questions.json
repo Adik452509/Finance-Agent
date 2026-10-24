@@ -1,0 +1,53 @@
+{
+  "description": "Phase 4 multi-agent eval. Expected figures were verified against the indexed filings (and the calculator) in Phases 1-4. Each question costs ~7-20k Groq tokens.",
+  "questions": [
+    {
+      "id": "ril_growth",
+      "question": "By what percentage did Reliance's consolidated revenue from operations grow from 2023-24 to 2024-25?",
+      "expect": {"numbers": ["7.18"], "must_not": ["48.11", "7.2%"], "tools": ["search_filings", "percent_change"], "route": "analyst"},
+      "notes": "9,14,472 -> 9,80,136 crore (p100 / p130 Total column)."
+    },
+    {
+      "id": "toy_operating_income_change",
+      "question": "What was the percentage change in Toyota's operating income from FY2025 to FY2026?",
+      "expect": {"numbers": ["21.46"], "must_not": ["21.47"], "tools": ["search_filings", "percent_change"], "route": "analyst"},
+      "notes": "4,795,586 -> 3,766,216 JPY millions; Toyota lists the OLDER year first. Exact: -21.4649%."
+    },
+    {
+      "id": "ril_revenue_in_billions",
+      "question": "Convert Reliance's 2024-25 revenue from operations into billion rupees.",
+      "expect": {"numbers": ["9801.36"], "must_not": ["980.136", "5174.28"], "tools": ["search_filings", "convert_units"], "route": "analyst"},
+      "notes": "9,80,136 crore = 9,801.36 billion (1 billion = 100 crore). 980.136 = /1000 mistake; 5174.28 = standalone Value of Sales."
+    },
+    {
+      "id": "ril_retail_share",
+      "question": "What share of Reliance's 2024-25 revenue from operations came from the Retail segment?",
+      "expect": {"numbers": ["29.69", "29.28"], "must_not": ["48.11"], "tools": ["search_filings", "share_of_total"], "route": "analyst"},
+      "notes": "29.69% = segment 2,91,043 / 9,80,136; 29.28% = Note 25 2,86,972 / 9,80,136. 48.11% = O2C column used as the total."
+    },
+    {
+      "id": "apple_net_income_growth",
+      "question": "By what percentage did Apple's net income change in fiscal 2025 compared with fiscal 2024?",
+      "expect": {"numbers": ["19.5", "19.50", "19.49"], "must_not": [], "tools": ["search_filings", "percent_change"], "route": "analyst"},
+      "notes": "93,736 -> 112,010 USD millions (p32)."
+    },
+    {
+      "id": "toyota_news",
+      "question": "What is the latest news about Toyota?",
+      "expect": {"numbers": [], "must_not": [], "tools": ["search_news"], "route": "writer", "cites_news": true},
+      "notes": "No calculation: the supervisor must skip the analyst."
+    },
+    {
+      "id": "toyota_price_and_revenue",
+      "question": "What is Toyota's current share price, and what were its total sales revenues for the fiscal year ended March 31, 2026?",
+      "expect": {"numbers": ["50,684,952"], "must_not": ["48,036,704", "45,095,325"], "tools": ["get_quote", "search_filings"], "route": "writer"},
+      "notes": "Price varies (not checked). Revenue: third column of p164 (older years first)."
+    },
+    {
+      "id": "not_found_future_year",
+      "question": "What was Apple's revenue growth in fiscal 2031?",
+      "expect": {"numbers": [], "must_not": [], "tools": [], "route": null, "refusal": true},
+      "notes": "Fiscal 2031 is not in any filing: the report must say so, not invent a number."
+    }
+  ]
+}
