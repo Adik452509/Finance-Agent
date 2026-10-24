@@ -9,6 +9,16 @@
       "module": "src.mcp_servers.filings_server",
       "description": "Semantic search over indexed annual reports (RAG)",
       "enabled": true
+    },
+    "calculator": {
+      "module": "src.mcp_servers.calculator_server",
+      "description": "Exact financial arithmetic: growth, CAGR, ratios, unit conversion",
+      "enabled": true
+    },
+    "news": {
+      "module": "src.mcp_servers.news_server",
+      "description": "Recent news articles (Tavily)",
+      "enabled": true
     }
   }
 }
