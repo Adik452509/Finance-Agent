@@ -102,6 +102,18 @@ def test_expand_citations_handles_lists_and_leaves_markdown_links_alone():
     assert unresolved == []
 
 
+def test_tool_names_used_as_citations_are_flagged():
+    # Seen live: "¥3,105 (Yahoo Finance)[get_quote]" and "[search_filings]".
+    _, unresolved = expand_citations("Price ¥3,105 [get_quote]. Income fell [search_filings].", {})
+    assert unresolved == ["get_quote", "search_filings"]
+
+
+def test_empty_model_answer_is_flagged():
+    result = run([call("search_filings", {"query": "revenue"}), AIMessage(content="")])
+    assert result.answer.startswith("No answer was produced.")
+    assert any("empty answer" in w for w in result.warnings)
+
+
 def test_malformed_source_labels_are_flagged():
     # Seen live: the model wrote "[7203.T p‑]" after a market-data figure.
     _, unresolved = expand_citations("Price ¥2,856.5 [7203.T p‑] and [S3].", {"AAPL p32": "x"})

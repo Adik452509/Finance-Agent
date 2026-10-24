@@ -29,6 +29,7 @@ Rules:
 6. Cite every figure right after it. For filings, put the passage's source_id in square
    brackets, e.g. [7203.T p164] (it is expanded into the full citation automatically).
    For market data write (Yahoo Finance, as of <as_of date>); for news write (<source>, <published_date>).
+   Never put tool names in brackets: [get_quote] or [search_filings] is not a source.
 7. State the period and unit of every figure. Do not combine figures in different currencies.
 8. If a tool returns ok=false, read error_type: invalid_input -> fix the arguments once;
    not_configured / quota_exceeded -> say that source is unavailable; do not retry the same call.

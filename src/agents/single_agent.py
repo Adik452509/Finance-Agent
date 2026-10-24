@@ -71,7 +71,10 @@ def build_single_agent(tools: list[BaseTool], llm: BaseChatModel | None = None):
         from config.llm import get_chat_model
 
         llm = get_chat_model("default")
-    return create_react_agent(llm, tools, prompt=SINGLE_AGENT_PROMPT, name="single_agent")
+    with warnings.catch_warnings():
+        # The deprecation fires when the agent is built (not at import); accepted until Phase 4.
+        warnings.simplefilter("ignore")
+        return create_react_agent(llm, tools, prompt=SINGLE_AGENT_PROMPT, name="single_agent")
 
 
 def _parse_tool_result(content: Any) -> tuple[bool | None, str | None]:
@@ -91,8 +94,9 @@ def _has_figures(text: str) -> bool:
 
 # [7203.T p164] or [AAPL p32, AAPL p39] - but not a markdown link "[text](url)".
 BRACKET_RE = re.compile(r"\[([^\[\]\n]{1,120})\](?!\()")
-# Anything shaped like a source label, including malformed ones such as "7203.T p-".
-SOURCE_ID_RE = re.compile(r"^[A-Z0-9.^-]+ p\S*$|^S\d+$")
+# Anything shaped like a source label, including malformed ones such as "7203.T p-",
+# and tool names used as if they were sources, e.g. "[get_quote]" (seen live).
+SOURCE_ID_RE = re.compile(r"^[A-Z0-9.^-]+ p\S*$|^S\d+$|^[a-z]+(?:_[a-z]+)+$")
 
 
 def _collect_citations(content: Any, into: dict[str, str]) -> None:
@@ -162,6 +166,9 @@ async def run_agent(agent, question: str, on_event: Callable[[str, Any], None] |
 
     answer, unresolved = expand_citations(normalize_answer(final_text), citations)
     run.answer = with_disclaimer(answer or "No answer was produced.")
+    if not answer and not run.stopped:
+        run.warnings.append("The model returned an empty answer (often a sign the request was near the "
+                            "token limit). Retry, or use the reasoning model.")
     if unresolved:
         run.warnings.append(f"Citations that match no retrieved passage: {', '.join(sorted(set(unresolved)))}")
     if not run.tool_calls and _has_figures(final_text):
