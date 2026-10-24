@@ -91,6 +91,7 @@ class ToolCallRecord(TypedDict):
 class ResearchState(TypedDict, total=False):
     question: str
     plan: dict                                                  # Plan.model_dump()
+    route: str                                                  # supervisor's decision: "analyst" or "writer"
     findings: Annotated[list[Finding], operator.add]
     analysis: str
     report: str
