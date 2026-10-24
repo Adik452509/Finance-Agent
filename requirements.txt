@@ -28,6 +28,10 @@ mcp==1.30.0
 langchain-mcp-adapters==0.1.14
 langgraph==1.0.1
 
+# --- Phase 3 ---
+# Already installed with mcp; pinned because news_server imports it directly.
+httpx==0.28.1
+
 # --- Dev ---
 pytest==8.4.1
 rich==14.1.0
