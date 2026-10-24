@@ -90,6 +90,36 @@ def check_facts_against_sources(facts: str, passages: dict[str, str]) -> list[st
         if ("consolidated" in claim.lower() and "STANDALONE FINANCIAL STATEMENTS" in upper
                 and "CONSOLIDATED FINANCIAL STATEMENTS" not in upper):
             warnings.append(f"researcher: a 'consolidated' figure cites a STANDALONE statement page ({', '.join(tags)})")
+        warnings += _segment_column_warnings(claim, text)
+    return warnings
+
+
+def _big_numbers(line: str) -> list[str]:
+    """Figures with 3+ digits that are not years: the 'columns' of a financial table row."""
+    return [n for n in NUMBER_RE.findall(line)
+            if len(_digits(n)) >= 3 and not re.fullmatch(r"(19|20)\d{2}", _digits(n))]
+
+
+def _segment_column_warnings(claim: str, source: str) -> list[str]:
+    """A company total taken from the wrong column of a segment table.
+
+    Seen live (twice): Reliance's segment row is "6,05,006 24,881 2,91,043 1,31,336 49,749 - 9,80,136"
+    (O2C, Oil & Gas, Retail, Digital, Others, Unallocable, TOTAL). Taking the FIRST number as the
+    consolidated total gave 48.11% instead of 29.69%. The total is the row's last column.
+    """
+    lowered = claim.lower()
+    if "segment" in lowered or not ("consolidated" in lowered or "total" in lowered):
+        return []
+    if "segment" not in source.lower():
+        return []
+    warnings = []
+    for figure in _big_numbers(claim):
+        for row in source.splitlines():
+            columns = _big_numbers(row)
+            if len(columns) >= 4 and _digits(figure) in {_digits(c) for c in columns[:-1]}:
+                warnings.append(f"researcher: {figure} comes from a multi-column segment table row and is not its "
+                                f"last ('Total') column ({columns[-1]}); a company total is usually the last column")
+                break
     return warnings
 
 
@@ -115,7 +145,12 @@ def make_planner(llm: BaseChatModel, companies: str | None = None):
         messages = [SystemMessage(system), HumanMessage(question)]
         tokens, warnings = 0, []
         for attempt in (1, 2):
-            reply = await llm.ainvoke(messages)
+            try:
+                reply = await llm.ainvoke(messages)
+            except Exception as e:  # e.g. daily budget gone: research with a simple plan anyway
+                plan = fallback_plan(question)
+                warnings.append(f"planner failed ({describe_error(e)}); using a one-step fallback plan")
+                break
             tokens += count_tokens(reply)
             try:
                 plan, notes = parse_plan(_message_text(reply.content))
@@ -141,7 +176,17 @@ def _step_brief(question: str, step: dict) -> str:
             f"Your step ({step['kind']}):{ticker} {step['goal']}")
 
 
-def make_researcher(llm: BaseChatModel, tools: list[BaseTool], max_rounds: int = 3, on_event: Events = None):
+def describe_error(error: Exception) -> str:
+    text = str(error)
+    if "413" in text or "Request too large" in text:
+        return "the request exceeded the model's per-request token limit (413)"
+    if "per day" in text or "TPD" in text:
+        return "the model's daily token budget is used up"
+    return f"{type(error).__name__}: {text[:150]}"
+
+
+def make_researcher(llm: BaseChatModel, tools: list[BaseTool], max_rounds: int = 3, on_event: Events = None,
+                    compact_older_results: int = 1500):
     research_tools = only(tools, RESEARCH_TOOLS)
 
     async def researcher(state: ResearchState) -> dict:
@@ -149,8 +194,16 @@ def make_researcher(llm: BaseChatModel, tools: list[BaseTool], max_rounds: int =
         findings, calls, citations, warnings, tokens = [], [], {}, [], 0
         for step in plan.model_dump()["steps"]:  # sequential: parallel calls would burst the token limit
             messages = [SystemMessage(RESEARCHER_PROMPT), HumanMessage(_step_brief(state["question"], step))]
-            result = await run_tool_loop(llm, research_tools, messages, agent="researcher",
-                                         max_rounds=max_rounds, on_event=on_event)
+            try:
+                result = await run_tool_loop(llm, research_tools, messages, agent="researcher",
+                                             max_rounds=max_rounds, compact_older_results=compact_older_results,
+                                             on_event=on_event)
+            except Exception as e:  # one failed step must not take down the whole report
+                reason = describe_error(e)
+                warnings.append(f"researcher step {step['id']} failed: {reason}")
+                findings.append({"step_id": step["id"], "kind": step["kind"], "goal": step["goal"],
+                                 "facts": f"- NOT FOUND: this research step failed ({reason})"})
+                continue
             tokens += result.tokens
             calls += result.calls
             passages: dict[str, str] = {}
@@ -181,8 +234,11 @@ def make_analyst(llm: BaseChatModel, tools: list[BaseTool], max_rounds: int = 4,
         plan = state.get("plan", {})
         brief = (f"Question: {state['question']}\n\nCalculation to do: {plan.get('calculation') or 'whatever the question needs'}"
                  f"\n\nFact notes:\n{format_findings(state.get('findings', []))}")
-        result = await run_tool_loop(llm, calc_tools, [SystemMessage(ANALYST_PROMPT), HumanMessage(brief)],
-                                     agent="analyst", max_rounds=max_rounds, on_event=on_event)
+        try:
+            result = await run_tool_loop(llm, calc_tools, [SystemMessage(ANALYST_PROMPT), HumanMessage(brief)],
+                                         agent="analyst", max_rounds=max_rounds, on_event=on_event)
+        except Exception as e:  # the writer can still report the researched figures
+            return {"analysis": "", "warnings": [f"analyst failed: {describe_error(e)}; no calculation available"]}
         warnings = []
         if not result.calls:
             warnings.append("analyst: no calculator tool was used, so any computed numbers are unverified")

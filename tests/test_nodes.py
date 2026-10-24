@@ -164,6 +164,77 @@ def test_fact_check_catches_standalone_figure_labelled_consolidated():
     assert check_facts_against_sources(facts.replace("consolidated", "standalone"), passages) == []
 
 
+SEGMENT_PAGE = ("CONSOLIDATED FINANCIAL STATEMENTS\n37. Segment Information\n"
+                "2024-25 O2C Oil and Gas Retail Digital Services Others Unallocable Total\n"
+                "Revenue from Operations (Net of GST)\n6,05,006 24,881 2,91,043 1,31,336 49,749 - 9,80,136")
+
+
+def test_fact_check_catches_company_total_from_wrong_segment_column():
+    # Seen live twice: O2C's 6,05,006 (first column) reported as the consolidated total.
+    from src.agents.nodes import check_facts_against_sources
+
+    passages = {"RELIANCE.NS p130": SEGMENT_PAGE}
+    wrong = "- Revenue from Operations (2024-25, consolidated): 6,05,006 INR crore [RELIANCE.NS p130]"
+    right = "- Revenue from Operations (2024-25, consolidated): 9,80,136 INR crore [RELIANCE.NS p130]"
+    segment = "- Revenue from Operations (2024-25, Retail segment): 2,91,043 INR crore [RELIANCE.NS p130]"
+    assert any("last ('Total') column (9,80,136)" in w for w in check_facts_against_sources(wrong, passages))
+    assert check_facts_against_sources(right, passages) == []
+    assert check_facts_against_sources(segment, passages) == []
+
+
+def test_segment_check_ignores_ordinary_multi_year_rows():
+    # Toyota's income statement lists 3 years; FY2025 is the middle column but that is correct.
+    from src.agents.nodes import check_facts_against_sources
+
+    passages = {"7203.T p164": "CONSOLIDATED STATEMENT OF INCOME\nOperating income 5,352,934 4,795,586 3,766,216"}
+    facts = "- Operating income (FY2025, consolidated): 4,795,586 JPY millions [7203.T p164]"
+    assert check_facts_against_sources(facts, passages) == []
+
+
+class RaisingModel(scripted().__class__):
+    """Scripted model where an Exception in the script is raised instead of returned."""
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+        from langchain_core.outputs import ChatGeneration, ChatResult
+
+        self.seen.append(list(messages))
+        item = next(self.messages)
+        if isinstance(item, Exception):
+            raise item
+        return ChatResult(generations=[ChatGeneration(message=item)])
+
+
+def raising(*replies) -> RaisingModel:
+    model = RaisingModel(messages=iter(replies))
+    model.seen = []
+    return model
+
+
+TOO_LARGE = Exception("Error code: 413 - Request too large for model on tokens per minute (TPM): Limit 8000")
+
+
+def test_failed_research_step_is_reported_and_the_next_step_still_runs():
+    steps = [{"id": 1, "kind": "filings", "ticker": "RELIANCE.NS", "goal": "Consolidated revenue 2024-25"},
+             {"id": 2, "kind": "filings", "ticker": "RELIANCE.NS", "goal": "Retail segment revenue 2024-25"}]
+    model = raising(TOO_LARGE, tool_call("search_filings", {"query": "retail"}), AIMessage(content=FACTS))
+    out = run(make_researcher(model, TOOLS), plan_state(steps))
+    assert out["findings"][0]["facts"].startswith("- NOT FOUND: this research step failed")
+    assert out["findings"][1]["facts"] == FACTS
+    assert any("step 1 failed" in w and "413" in w for w in out["warnings"])
+
+
+def test_failed_analyst_leaves_an_empty_analysis_with_a_warning():
+    out = run(make_analyst(raising(TOO_LARGE), TOOLS), plan_state())
+    assert out["analysis"] == "" and any("analyst failed" in w for w in out["warnings"])
+
+
+def test_planner_api_failure_uses_the_fallback_plan():
+    daily = Exception("Rate limit reached on tokens per day (TPD): Limit 200000")
+    out = run(make_planner(raising(daily), companies=""), {"question": "By what percentage did revenue grow?"})
+    assert out["plan"]["steps"][0]["kind"] == "any"
+    assert any("daily token budget" in w for w in out["warnings"])
+
+
 def test_researcher_runs_the_fact_check():
     model = scripted(tool_call("search_filings", {"query": "revenue", "ticker": "RELIANCE.NS"}),
                      AIMessage(content="- Revenue (2024-25, consolidated): ₹1,23,456 crore [RELIANCE.NS p100]"))

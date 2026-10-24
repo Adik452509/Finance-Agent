@@ -65,6 +65,9 @@ Rules:
 - 1 to <<MAX_STEPS>> steps. One company and one source kind per step. Use as few steps as possible.
 - Figures from the same company, source and table belong in ONE step: e.g. "revenue for 2024-25
   AND 2023-24" is one filings step (one search returns both years), not two.
+- A company-wide total and a segment figure come from DIFFERENT tables (income statement vs segment
+  note): put them in separate steps, e.g. step 1 "consolidated Revenue from Operations 2024-25",
+  step 2 "Retail segment revenue from operations 2024-25".
 - For company-wide filings figures, say "consolidated" in the goal (unless the user asks for standalone),
   and name the exact line item, e.g. "consolidated Revenue from Operations for 2024-25".
 - Never add a calculation step: set needs_calculation to true instead. Any growth, percentage,

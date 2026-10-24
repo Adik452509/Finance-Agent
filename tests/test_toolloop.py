@@ -80,6 +80,17 @@ def test_oversized_tool_output_is_trimmed_for_the_model():
     assert len(result.results[0][1]) > 40_000  # the full content is still kept for the agent's own use
 
 
+def test_earlier_results_are_compacted_but_the_latest_stays_whole():
+    # Seen live: 3 searches in one step pushed a request past 8,000 tokens (HTTP 413).
+    calls = [tool_call("big_tool", {"x": i}, call_id=f"c{i}") for i in range(3)]
+    model = scripted(*calls, AIMessage(content="done"))
+    loop(model, max_rounds=5, max_tool_chars=20_000, compact_older_results=500)
+    last_input = model.seen[-1]
+    tool_messages = [m for m in last_input if isinstance(m, ToolMessage)]
+    assert [len(m.content) < 700 for m in tool_messages] == [True, True, False]  # older two shortened
+    assert "shortened to save tokens" in tool_messages[0].content
+
+
 def test_tokens_are_summed_across_rounds():
     model = scripted(tool_call("percent_change", {"old_value": 1, "new_value": 2}, tokens=1200),
                      AIMessage(content="ok", usage_metadata={"input_tokens": 900, "output_tokens": 100, "total_tokens": 1000}))

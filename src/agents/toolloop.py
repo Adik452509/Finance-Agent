@@ -73,6 +73,17 @@ async def _run_tool(tool: BaseTool | None, name: str, args: dict, available: lis
     return content if isinstance(content, str) else _message_text(content)
 
 
+COMPACTED = "\n...[earlier result shortened to save tokens; search again if you need more]"
+
+
+def _compact(msgs: list[BaseMessage], index: int, limit: int) -> None:
+    """Shorten an earlier tool result in place (idempotent)."""
+    message = msgs[index]
+    if isinstance(message, ToolMessage) and len(message.content) > limit + len(COMPACTED):
+        msgs[index] = ToolMessage(content=message.content[:limit] + COMPACTED,
+                                  tool_call_id=message.tool_call_id, name=message.name)
+
+
 def _trim(content: str, limit: int) -> str:
     if len(content) <= limit:
         return content
@@ -87,16 +98,29 @@ async def run_tool_loop(
     agent: str,
     max_rounds: int = DEFAULT_MAX_ROUNDS,
     max_tool_chars: int = MAX_TOOL_CHARS,
+    compact_older_results: int | None = None,
     on_event: Callable[[str, dict], None] | None = None,
 ) -> LoopResult:
-    """Run the think -> tool -> think loop; return the final text, calls and token count."""
+    """Run the think -> tool -> think loop; return the final text, calls and token count.
+
+    compact_older_results: if set, tool results from EARLIER rounds are cut to this many
+    characters before each new LLM call (the newest round stays complete). Seen live:
+    a researcher searching 3 times in one step grew the conversation past Groq's
+    8,000-token request limit (HTTP 413).
+    """
     emit = on_event or (lambda kind, payload: None)
     by_name = {t.name: t for t in tools}
     bound = llm.bind_tools(tools) if tools else llm
     msgs = list(messages)
     result = LoopResult(text="")
+    earlier_rounds: list[int] = []  # positions of ToolMessages from rounds before the latest
+    latest_round: list[int] = []
 
     while True:
+        if compact_older_results:
+            for i in earlier_rounds:
+                _compact(msgs, i, compact_older_results)
+
         if result.rounds >= max_rounds:
             # Cap reached: one last call with no tools bound, so it cannot keep looping.
             result.hit_cap = True
@@ -114,6 +138,8 @@ async def run_tool_loop(
             return result
 
         result.rounds += 1
+        earlier_rounds += latest_round
+        latest_round = []
         for call in reply.tool_calls:
             name, args = call["name"], call.get("args", {}) or {}
             emit("call", {"agent": agent, "name": name, "args": args})
@@ -125,4 +151,5 @@ async def run_tool_loop(
             result.calls.append(record)
             result.results.append((name, content))
             msgs.append(ToolMessage(content=_trim(content, max_tool_chars), tool_call_id=call["id"], name=name))
+            latest_round.append(len(msgs) - 1)
             emit("result", record)
