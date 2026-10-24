@@ -132,6 +132,60 @@ def test_analyst_uses_calculator_and_reports():
     assert "9,80,136" in model.seen[0][1].content  # the analyst received the fact notes
 
 
+def test_analyst_empty_text_falls_back_to_calculator_results():
+    # Seen live: the analyst called percent_change, then returned no text at all.
+    model = scripted(tool_call("percent_change", {"old_value": "9,14,472", "new_value": "9,80,136"}), AIMessage(content=""))
+    out = run(make_analyst(model, TOOLS), plan_state())
+    assert out["analysis"].startswith("ANALYSIS (assembled from calculator results):")
+    assert "percent_change(old_value=9,14,472, new_value=9,80,136) = 7.18%" in out["analysis"]
+    assert any("assembled from the calculator results" in w for w in out["warnings"])
+
+
+def test_fact_check_catches_figures_missing_from_the_cited_source():
+    from src.agents.nodes import check_facts_against_sources
+
+    passages = {"RELIANCE.NS p100": "CONSOLIDATED FINANCIAL STATEMENTS\nRevenue from Operations 25 9,80,136 9,14,472"}
+    good = "- Revenue from operations (2024-25, consolidated): ₹9,80,136 crore [RELIANCE.NS p100]"
+    bad = "- Revenue from operations (2024-25, consolidated): ₹9,99,999 crore [RELIANCE.NS p100]"
+    assert check_facts_against_sources(good, passages) == []
+    assert any("9,99,999" in w for w in check_facts_against_sources(bad, passages))
+    # Western grouping of the same figure still matches; years are not treated as figures.
+    assert check_facts_against_sources("- Revenue (FY 2024-25): 980,136 crore [RELIANCE.NS p100]", passages) == []
+
+
+def test_fact_check_catches_standalone_figure_labelled_consolidated():
+    # Seen live: p74 (STANDALONE notes) "Value of Sales 5,17,428" reported as consolidated revenue.
+    from src.agents.nodes import check_facts_against_sources
+
+    passages = {"RELIANCE.NS p74": "STANDALONE FINANCIAL STATEMENTS\nValue of Sales 5,17,428 5,13,313"}
+    facts = "- Revenue from Operations (FY 2024-25, consolidated): 5,17,428 crore [RELIANCE.NS p74]"
+    warnings = check_facts_against_sources(facts, passages)
+    assert any("STANDALONE" in w for w in warnings)
+    assert check_facts_against_sources(facts.replace("consolidated", "standalone"), passages) == []
+
+
+def test_researcher_runs_the_fact_check():
+    model = scripted(tool_call("search_filings", {"query": "revenue", "ticker": "RELIANCE.NS"}),
+                     AIMessage(content="- Revenue (2024-25, consolidated): ₹1,23,456 crore [RELIANCE.NS p100]"))
+    out = run(make_researcher(model, TOOLS), plan_state())
+    assert any("1,23,456" in w for w in out["warnings"])
+
+
+def test_manual_unit_conversion_via_ratio_is_flagged():
+    # Seen live: crore -> billion done as ratio(980136, 1000) = 980.136 (correct: 9,801.36).
+    from src.agents.nodes import manual_conversion_warnings
+
+    def ratio_call(denominator):
+        return {"name": "ratio", "args": {"numerator": "980136", "denominator": denominator}, "ok": True}
+
+    assert manual_conversion_warnings([ratio_call("1000")])
+    assert manual_conversion_warnings([ratio_call("1,00,000")])
+    assert manual_conversion_warnings([ratio_call(100.0)])
+    assert manual_conversion_warnings([ratio_call("416161")]) == []   # a real ratio, e.g. net margin
+    assert manual_conversion_warnings([ratio_call("1")]) == []
+    assert manual_conversion_warnings([{"name": "convert_units", "args": {}, "ok": True}]) == []
+
+
 def test_analyst_warns_without_calculator_and_cannot_search():
     out = run(make_analyst(scripted(AIMessage(content="ANALYSIS: about 7%")), TOOLS), plan_state())
     assert any("no calculator tool" in w for w in out["warnings"])

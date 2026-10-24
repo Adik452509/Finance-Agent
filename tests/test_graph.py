@@ -24,7 +24,8 @@ def usage(n):
 
 def search_filings(query: str, ticker: str | None = None, k: int = 5) -> str:
     """Search annual reports."""
-    return json.dumps({"ok": True, "results": [{"source_id": "RELIANCE.NS p100", "citation": RIL_CITATION, "text": "..."}]})
+    text = "CONSOLIDATED FINANCIAL STATEMENTS (₹ in crore)\nRevenue from Operations 25 9,80,136 9,14,472"
+    return json.dumps({"ok": True, "results": [{"source_id": "RELIANCE.NS p100", "citation": RIL_CITATION, "text": text}]})
 
 
 def search_news(query: str, days: int = 7, max_results: int = 5) -> str:

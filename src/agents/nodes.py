@@ -12,6 +12,8 @@ Keeping each request small is deliberate: Groq's free tier allows 8,000 tokens
 per request, and a single agent with all 12 tools went over it in Phase 3.
 """
 
+import json
+import re
 from typing import Callable
 
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -41,6 +43,54 @@ def companies_context() -> str:
         f"figures in {d.reporting_unit}"
         for d in load_registry()
     )
+
+
+SOURCE_TAG_RE = re.compile(r"\[([A-Z0-9.^-]+ p\d+)\]")
+NUMBER_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
+
+
+def collect_passages(content: str, into: dict[str, str]) -> None:
+    """Remember source_id -> passage text from a search_filings result (for fact checking)."""
+    try:
+        data = json.loads(content)
+    except (json.JSONDecodeError, TypeError):
+        return
+    for p in (data.get("results") or []) if isinstance(data, dict) else []:
+        if isinstance(p, dict) and p.get("source_id"):
+            into[p["source_id"]] = into.get(p["source_id"], "") + "\n" + str(p.get("text", ""))
+
+
+def _digits(text: str) -> str:
+    return re.sub(r"\D", "", text)
+
+
+def check_facts_against_sources(facts: str, passages: dict[str, str]) -> list[str]:
+    """Cheap grounding check on the researcher's notes (an early, code-only Critic).
+
+    For every fact line that cites a filing passage:
+      - each figure in the line (3+ digits, not a year) must appear in that passage;
+      - a line saying "consolidated" must not cite a passage from the standalone statements.
+    Seen live: a "consolidated" revenue figure that was really the standalone "Value of Sales".
+    """
+    warnings = []
+    for line in facts.splitlines():
+        tags = SOURCE_TAG_RE.findall(line)
+        if not tags:
+            continue
+        text = "\n".join(passages.get(t, "") for t in tags)
+        if not text.strip():
+            continue  # cited a passage we never saw; the writer's citation check reports that
+        source_numbers = {_digits(n) for n in NUMBER_RE.findall(text)}
+        claim = SOURCE_TAG_RE.sub("", line)
+        for figure in NUMBER_RE.findall(claim):
+            d = _digits(figure)
+            if len(d) >= 3 and not re.fullmatch(r"(19|20)\d{2}", d) and d not in source_numbers:
+                warnings.append(f"researcher: {figure} is not in its cited source {', '.join(tags)}")
+        upper = text.upper()
+        if ("consolidated" in claim.lower() and "STANDALONE FINANCIAL STATEMENTS" in upper
+                and "CONSOLIDATED FINANCIAL STATEMENTS" not in upper):
+            warnings.append(f"researcher: a 'consolidated' figure cites a STANDALONE statement page ({', '.join(tags)})")
+    return warnings
 
 
 def format_findings(findings: list[dict]) -> str:
@@ -103,9 +153,12 @@ def make_researcher(llm: BaseChatModel, tools: list[BaseTool], max_rounds: int =
                                          max_rounds=max_rounds, on_event=on_event)
             tokens += result.tokens
             calls += result.calls
+            passages: dict[str, str] = {}
             for name, content in result.results:
                 if name == "search_filings":
                     collect_citations(content, citations)
+                    collect_passages(content, passages)
+            warnings += check_facts_against_sources(result.text, passages)
             if not result.calls:
                 warnings.append(f"researcher step {step['id']}: no tool was used, so its notes are unverified")
             if result.hit_cap:
@@ -134,10 +187,60 @@ def make_analyst(llm: BaseChatModel, tools: list[BaseTool], max_rounds: int = 4,
         if not result.calls:
             warnings.append("analyst: no calculator tool was used, so any computed numbers are unverified")
         warnings += [f"analyst: {c['name']} failed: {c['error']}" for c in result.calls if c["ok"] is False]
-        return {"analysis": result.text, "tool_calls": result.calls,
+        warnings += manual_conversion_warnings(result.calls)
+
+        analysis = result.text
+        if not analysis.strip() and result.calls:
+            # Seen live: the model called the calculator, then returned no text. The tool
+            # results are the trustworthy part anyway, so assemble the analysis from them.
+            analysis = analysis_from_tool_results(result.calls, result.results)
+            warnings.append("analyst returned no text; analysis assembled from the calculator results")
+        return {"analysis": analysis, "tool_calls": result.calls,
                 "warnings": warnings, "usage": {"analyst": result.tokens}}
 
     return analyst
+
+
+def manual_conversion_warnings(calls: list[dict]) -> list[str]:
+    """Flag ratio() calls dividing by a power of ten: almost always a hand-made unit conversion.
+
+    Seen live: "convert crore to billion" done as ratio(980136, 1000) -> 980.136,
+    but 1 billion = 100 crore, so the right answer is 9,801.36 (10x off).
+    """
+    warnings = []
+    for call in calls:
+        if call["name"] != "ratio":
+            continue
+        raw = str(call["args"].get("denominator", "")).replace(",", "").strip()
+        try:
+            denominator = float(raw)
+        except ValueError:
+            continue
+        if denominator >= 10 and float(denominator).is_integer() and str(int(denominator)).strip("0") == "1":
+            warnings.append(f"analyst: ratio(..., {raw}) looks like a manual unit conversion; "
+                            "convert_units should be used (e.g. 1 billion = 100 crore)")
+    return warnings
+
+
+def analysis_from_tool_results(calls: list[dict], results: list[tuple[str, str]]) -> str:
+    """Deterministic ANALYSIS text built straight from successful calculator outputs."""
+    lines = ["ANALYSIS (assembled from calculator results):"]
+    for call, (_, content) in zip(calls, results):
+        if call["ok"] is not True:
+            continue
+        try:
+            data = json.loads(content)
+        except json.JSONDecodeError:
+            continue
+        if "result_percent" in data:
+            value = f"{data['result_percent']}%"
+        elif "result" in data:
+            value = str(data["result"])
+        else:
+            continue
+        args = ", ".join(f"{k}={v}" for k, v in call["args"].items())
+        lines.append(f"- {call['name']}({args}) = {value} (formula: {data.get('formula', 'n/a')})")
+    return "\n".join(lines) if len(lines) > 1 else ""
 
 
 # --- writer --------------------------------------------------------------------------------
