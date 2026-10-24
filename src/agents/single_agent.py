@@ -14,9 +14,7 @@ Guardrails enforced in code (not just asked for in the prompt):
   - the disclaimer is appended by code.
 """
 
-import json
 import logging
-import re
 import time
 import warnings
 from dataclasses import dataclass, field
@@ -27,6 +25,8 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import BaseTool
 from langgraph.errors import GraphRecursionError
 
+from src.agents.citations import collect_citations as _collect_citations
+from src.agents.citations import expand_citations  # noqa: F401  (re-exported for tests/scripts)
 from src.agents.prompts import SINGLE_AGENT_PROMPT
 from src.agents.toolloop import parse_tool_result
 from src.observability.guardrails import with_disclaimer
@@ -80,41 +80,6 @@ def build_single_agent(tools: list[BaseTool], llm: BaseChatModel | None = None):
 
 def _has_figures(text: str) -> bool:
     return any(not YEAR_RE.match(m) for m in FIGURE_RE.findall(text))
-
-
-# [7203.T p164] or [AAPL p32, AAPL p39] - but not a markdown link "[text](url)".
-BRACKET_RE = re.compile(r"\[([^\[\]\n]{1,120})\](?!\()")
-# Anything shaped like a source label, including malformed ones such as "7203.T p-",
-# and tool names used as if they were sources, e.g. "[get_quote]" (seen live).
-SOURCE_ID_RE = re.compile(r"^[A-Z0-9.^-]+ p\S*$|^S\d+$|^[a-z]+(?:_[a-z]+)+$")
-
-
-def _collect_citations(content: Any, into: dict[str, str]) -> None:
-    """Remember source_id -> citation from a search_filings result."""
-    try:
-        data = json.loads(_message_text(content))
-    except (json.JSONDecodeError, TypeError):
-        return
-    for passage in (data.get("results") or []) if isinstance(data, dict) else []:
-        if isinstance(passage, dict) and passage.get("source_id") and passage.get("citation"):
-            into[passage["source_id"]] = passage["citation"]
-
-
-def expand_citations(text: str, citations: dict[str, str]) -> tuple[str, list[str]]:
-    """Replace [source_id] labels with full citations; report labels that match nothing.
-
-    Done in code so the reader always sees the real source, whatever the model wrote.
-    """
-    unresolved: list[str] = []
-
-    def replace(match: re.Match) -> str:
-        parts = [p.strip() for p in re.split(r"[,;]", match.group(1))]
-        if parts and all(p in citations for p in parts):
-            return "(" + "; ".join(citations[p] for p in parts) + ")"
-        unresolved.extend(p for p in parts if SOURCE_ID_RE.match(p) and p not in citations)
-        return match.group(0)
-
-    return BRACKET_RE.sub(replace, text), unresolved
 
 
 async def run_agent(agent, question: str, on_event: Callable[[str, Any], None] | None = None) -> AgentRun:

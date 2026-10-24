@@ -54,7 +54,7 @@ def parse_tool_result(content: Any) -> tuple[bool | None, str | None]:
     return None, None
 
 
-def _tokens(message: AIMessage) -> int:
+def count_tokens(message: AIMessage) -> int:
     usage = getattr(message, "usage_metadata", None) or {}
     return int(usage.get("total_tokens", 0) or 0)
 
@@ -102,12 +102,12 @@ async def run_tool_loop(
             result.hit_cap = True
             msgs.append(HumanMessage(STOP_TOOLS))
             final = await llm.ainvoke(msgs)
-            result.tokens += _tokens(final)
+            result.tokens += count_tokens(final)
             result.text = _message_text(final.content).strip()
             return result
 
         reply = await bound.ainvoke(msgs)
-        result.tokens += _tokens(reply)
+        result.tokens += count_tokens(reply)
         msgs.append(reply)
         if not getattr(reply, "tool_calls", None):
             result.text = _message_text(reply.content).strip()
