@@ -70,6 +70,15 @@ def show_update(node: str, update: dict) -> None:
         revision = update.get("revisions")
         label = f"revision {revision}" if revision else "first draft"
         console.print(f"[bold magenta]WRITER[/bold magenta] → {label} ({len(update.get('draft', ''))} characters)")
+    elif node == "critic":
+        critique = update.get("critique", {})
+        by = "+".join(critique.get("checked_by", []))
+        if critique.get("verdict") == "pass":
+            console.print(f"[bold magenta]CRITIC[/bold magenta] (round {update.get('critic_rounds')}, {by}) → [green]pass[/green]")
+        else:
+            console.print(f"[bold magenta]CRITIC[/bold magenta] (round {update.get('critic_rounds')}, {by}) → [red]fail[/red]")
+            for issue in critique.get("issues", []):
+                console.print(escape(f"    - {issue.get('claim', '')}: {issue.get('problem', '')}"))
     elif node == "finalize":
         console.print(Panel(Markdown(update["report"]), title="REPORT", border_style="green"))
     for w in update.get("warnings", []):

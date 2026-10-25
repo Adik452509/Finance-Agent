@@ -1,17 +1,22 @@
-"""The Phase 4 multi-agent graph.
+"""The multi-agent graph (Phase 4 team + Phase 5 critic loop).
 
-    START -> planner -> researcher -> supervisor --needs calculation--> analyst -> writer -> finalize -> END
-                                                 +--otherwise--------------------> writer -> finalize -> END
+    START -> planner -> researcher -> supervisor --needs calculation--> analyst --+
+                                                 +--otherwise------------------> writer -> critic
+                                                                                   ^          |
+                                                     fail, rounds left: revise  +--+          |
+                                                                                              v
+                                                         pass, or no rounds left -> finalize -> END
 
-finalize is code only: it expands citations and adds the disclaimer, so the writer's
-draft keeps short [TICKER pN] labels that the Phase 5 critic can check.
+The supervisor and both routing decisions are plain code, not LLMs: predictable,
+free (no tokens) and easy to debug. The revision cap is counted on the CRITIC's
+rounds, so the loop always ends - even if the writer fails while revising.
 
-The supervisor is deliberately plain code, not an LLM: routing on the plan's
-needs_calculation flag is predictable, free (no tokens) and easy to debug.
-An LLM supervisor would cost tokens on every question and could route wrongly.
+finalize is code only: it expands citations and adds the disclaimer (and a
+verification note if the critic was still unhappy), so the writer's draft keeps
+short [TICKER pN] labels that the critic can check.
 
 Models are split by role so the work spreads across Groq's per-model daily budgets:
-the cheap model plans and researches; the stronger model calculates and writes.
+the cheap model plans and researches; the stronger model calculates, writes and checks.
 
     async with MCPToolbox() as toolbox:
         graph = build_graph(toolbox.tools)
@@ -23,14 +28,17 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
 from langgraph.graph import END, START, StateGraph
 
+from src.agents.critic import make_critic
 from src.agents.nodes import (
     CALC_TOOLS, Events, finalize, make_analyst, make_planner, make_researcher, make_writer, only,
 )
 from src.agents.state import ResearchState
 
 # agent -> config.llm role ("default" = gpt-oss-20b, "reasoning" = gpt-oss-120b on Groq)
-DEFAULT_ROLES = {"planner": "default", "researcher": "default", "analyst": "reasoning", "writer": "reasoning"}
-AGENTS = ("planner", "researcher", "analyst", "writer")
+DEFAULT_ROLES = {"planner": "default", "researcher": "default", "analyst": "reasoning",
+                 "writer": "reasoning", "critic": "reasoning"}
+AGENTS = ("planner", "researcher", "analyst", "writer", "critic")
+MAX_REVISIONS = 2  # the critic checks at most MAX_REVISIONS + 1 drafts
 
 
 def make_supervisor(has_calculator: bool):
@@ -47,6 +55,15 @@ def make_supervisor(has_calculator: bool):
     return supervisor
 
 
+def route_after_critic(state: ResearchState, max_revisions: int = MAX_REVISIONS) -> str:
+    """Send a failed draft back for revision while rounds remain; otherwise finish."""
+    if (state.get("critique") or {}).get("verdict") != "fail":
+        return "finalize"
+    if state.get("critic_rounds", 0) > max_revisions:
+        return "finalize"  # out of rounds: finalize adds a verification note
+    return "writer"
+
+
 def default_llms(missing: set[str] | None = None) -> dict[str, BaseChatModel]:
     from config.llm import get_chat_model
 
@@ -54,8 +71,8 @@ def default_llms(missing: set[str] | None = None) -> dict[str, BaseChatModel]:
 
 
 def build_graph(tools: list[BaseTool], llms: dict[str, BaseChatModel] | None = None,
-                companies: str | None = None, on_event: Events = None):
-    """Wire the four agents and the supervisor into a compiled LangGraph."""
+                companies: str | None = None, on_event: Events = None, max_revisions: int = MAX_REVISIONS):
+    """Wire the agents, the supervisor and the critic loop into a compiled LangGraph."""
     llms = dict(llms or {})
     missing = set(AGENTS) - set(llms)
     if missing:
@@ -67,6 +84,7 @@ def build_graph(tools: list[BaseTool], llms: dict[str, BaseChatModel] | None = N
     g.add_node("supervisor", make_supervisor(has_calculator=bool(only(tools, CALC_TOOLS))))
     g.add_node("analyst", make_analyst(llms["analyst"], tools, on_event=on_event))
     g.add_node("writer", make_writer(llms["writer"]))
+    g.add_node("critic", make_critic(llms["critic"]))
     g.add_node("finalize", finalize)
 
     g.add_edge(START, "planner")
@@ -74,6 +92,8 @@ def build_graph(tools: list[BaseTool], llms: dict[str, BaseChatModel] | None = N
     g.add_edge("researcher", "supervisor")
     g.add_conditional_edges("supervisor", lambda state: state["route"], {"analyst": "analyst", "writer": "writer"})
     g.add_edge("analyst", "writer")
-    g.add_edge("writer", "finalize")
+    g.add_edge("writer", "critic")
+    g.add_conditional_edges("critic", lambda state: route_after_critic(state, max_revisions),
+                            {"writer": "writer", "finalize": "finalize"})
     g.add_edge("finalize", END)
     return g.compile()

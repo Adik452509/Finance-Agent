@@ -96,6 +96,7 @@ class ResearchState(TypedDict, total=False):
     analysis: str
     draft: str                                                  # writer's text, citations still as [TICKER pN]
     critique: dict                                              # critic's latest verdict (Phase 5)
+    critic_rounds: int                                          # how many times the critic has checked a draft
     revisions: int                                              # how many times the writer has revised
     report: str                                                 # final text: citations expanded + disclaimer
     citations: Annotated[dict[str, str], merge_dicts]           # source_id -> full citation

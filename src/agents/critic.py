@@ -169,7 +169,7 @@ def make_critic(llm: BaseChatModel | None):
                 warnings.append(f"critic: the judge failed ({type(e).__name__}); using the code checks only")
 
         critique = {"verdict": "fail" if issues else "pass", "issues": issues, "checked_by": checked_by}
-        update = {"critique": critique, "warnings": warnings}
+        update = {"critique": critique, "critic_rounds": state.get("critic_rounds", 0) + 1, "warnings": warnings}
         if tokens:
             update["usage"] = {"critic": tokens}
         return update
