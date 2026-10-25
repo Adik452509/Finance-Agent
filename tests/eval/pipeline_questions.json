@@ -1,5 +1,5 @@
 {
-  "description": "Phase 4 multi-agent eval. Expected figures were verified against the indexed filings (and the calculator) in Phases 1-4. Each question costs ~7-20k Groq tokens.",
+  "description": "Multi-agent pipeline eval (Phase 4, extended in Phase 5). Every expected figure was verified against the indexed filing text. Each question costs ~7-20k Groq tokens (+~1-3k for the critic).",
   "questions": [
     {
       "id": "ril_growth",
@@ -42,6 +42,31 @@
       "question": "What is Toyota's current share price, and what were its total sales revenues for the fiscal year ended March 31, 2026?",
       "expect": {"numbers": ["50,684,952"], "must_not": ["48,036,704", "45,095,325"], "tools": ["get_quote", "search_filings"], "route": "writer"},
       "notes": "Price varies (not checked). Revenue: third column of p164 (older years first)."
+    },
+    {
+      "id": "ril_total_assets",
+      "question": "What were Reliance's consolidated total assets as at 31st March 2025?",
+      "expect": {"numbers": ["19,50,121"], "must_not": ["17,55,986"], "tools": ["search_filings"], "route": "writer"},
+      "notes": "Balance sheet p99: 'Total Assets 19,50,121 17,55,986' (2025 first). No calculation: analyst skipped."
+    },
+    {
+      "id": "toy_revenue_middle_column",
+      "question": "What were Toyota's total sales revenues for the fiscal year ended March 31, 2025?",
+      "expect": {"numbers": ["48,036,704"], "must_not": ["50,684,952", "45,095,325"], "tools": ["search_filings"], "route": "writer"},
+      "notes": "p164 lists 2024, 2025, 2026 (OLDEST first): FY2025 is the MIDDLE column."
+    },
+    {
+      "id": "apple_net_margin",
+      "question": "What was Apple's net income as a percentage of total net sales in fiscal 2025?",
+      "expect": {"numbers": ["26.92", "0.2692"], "must_not": [], "tools": ["search_filings"],
+                 "tools_any": ["share_of_total", "ratio"], "route": "analyst"},
+      "notes": "112,010 / 416,161 = 26.9151% (p32). share_of_total gives 26.92; ratio gives 0.2692."
+    },
+    {
+      "id": "ril_profit_for_the_year",
+      "question": "What was Reliance's consolidated profit for the year 2024-25?",
+      "expect": {"numbers": ["81,309", "69,648"], "must_not": ["79,020"], "tools": ["search_filings"], "route": "writer"},
+      "notes": "p100: total 81,309 (owners 69,648); 79,020 is 2023-24."
     },
     {
       "id": "not_found_future_year",

@@ -1,16 +1,17 @@
-"""Score the Phase 4 multi-agent team against tests/eval/pipeline_questions.json.
+"""Score the multi-agent team (with the Phase 5 critic) against tests/eval/pipeline_questions.json.
 
 Run from the project root:
-    python scripts/run_pipeline_eval.py                    # all questions (~90-110k Groq tokens)
+    python scripts/run_pipeline_eval.py                    # all 12 questions (~150-180k Groq tokens)
     python scripts/run_pipeline_eval.py --only ril_        # just the questions whose id starts with ril_
     python scripts/run_pipeline_eval.py --all-reasoning    # every agent on the stronger model
 
 Each question is checked for: the right figure, no known-wrong figures, the required
 tools actually used, the supervisor's route, refusals where the answer doesn't exist,
-and news citations. Tokens and warnings are reported per question.
+and news citations. Also reported: the critic outcome per question (passed first draft /
+fixed by revision / unresolved), tokens, and how many wrong figures reached a report.
 
-Cost: one full run is roughly half of a model's free daily Groq budget (200k tokens per
-model per day), so run it after a fresh budget, not straight after heavy testing.
+Cost: a full run uses most of the small model's free daily Groq budget (200k tokens per
+model per day), so run it on a fresh budget, or in parts with --only.
 Exits 0 only if every question passes.
 """
 
@@ -68,29 +69,46 @@ async def main() -> int:
                 final = await graph.ainvoke({"question": q["question"]})
             except Exception as e:
                 rows.append({"id": q["id"], "passed": False, "failures": [f"{type(e).__name__}: {str(e)[:200]}"],
-                             "notes": [], "tokens": 0, "seconds": round(time.monotonic() - t0)})
+                             "notes": [], "tokens": 0, "seconds": round(time.monotonic() - t0),
+                             "wrong_figure": False, "critic": {"outcome": "not run"}})
                 continue
             result = check_result(q["expect"], final)
             rows.append({"id": q["id"], "passed": result.passed, "failures": result.failures, "notes": result.notes,
                          "tokens": sum((final.get("usage") or {}).values()), "seconds": round(time.monotonic() - t0),
-                         "route": final.get("route"), "report": final.get("report", "")[:1500]})
+                         "route": final.get("route"), "wrong_figure": result.wrong_figure, "critic": result.critic,
+                         "critic_tokens": (final.get("usage") or {}).get("critic", 0),
+                         "report": final.get("report", "")[:1500]})
 
-    table = Table(title="Phase 4 pipeline eval" + (" (all reasoning)" if args.all_reasoning else ""))
-    for col in ("id", "result", "tokens", "time", "detail"):
+    # Save first: a display bug must never throw away a run that cost ~150k tokens.
+    RESULTS.parent.mkdir(parents=True, exist_ok=True)
+    RESULTS.write_text(json.dumps(rows, indent=2, ensure_ascii=False), encoding="utf-8")
+    render(rows, args.all_reasoning, time.monotonic() - started)
+    console.print(f"Full results (including reports): {RESULTS}")
+    return 0 if all(r["passed"] for r in rows) else 1
+
+
+def render(rows: list[dict], all_reasoning: bool, seconds: float) -> None:
+    table = Table(title="Pipeline eval (team + critic)" + (" - all reasoning" if all_reasoning else ""))
+    for col in ("id", "result", "critic", "tokens", "time", "detail"):
         table.add_column(col, overflow="fold")
     for r in rows:
         detail = "; ".join(r["failures"]) or ("; ".join(r["notes"]) if r["notes"] else "")
-        table.add_row(r["id"], "[green]PASS[/green]" if r["passed"] else "[red]FAIL[/red]",
+        c = r["critic"]
+        critic_cell = c["outcome"] + (f" ({c['revisions']} rev)" if c.get("revisions") else "")
+        table.add_row(r["id"], "[green]PASS[/green]" if r["passed"] else "[red]FAIL[/red]", critic_cell,
                       f"{r['tokens']:,}", f"{r['seconds']}s", escape(detail))
     console.print(table)
 
     passed = sum(r["passed"] for r in rows)
-    console.print(f"\nPassed: {passed}/{len(rows)}   Tokens: {sum(r['tokens'] for r in rows):,}   "
-                  f"Time: {time.monotonic() - started:.0f}s")
-    RESULTS.parent.mkdir(parents=True, exist_ok=True)
-    RESULTS.write_text(json.dumps(rows, indent=2, ensure_ascii=False), encoding="utf-8")
-    console.print(f"Full results (including reports): {RESULTS}")
-    return 0 if passed == len(rows) else 1
+    outcomes = [r["critic"]["outcome"] for r in rows]
+    console.print(f"\nPassed: {passed}/{len(rows)}   Tokens: {sum(r['tokens'] for r in rows):,} "
+                  f"(critic {sum(r.get('critic_tokens', 0) for r in rows):,})   Time: {seconds:.0f}s")
+    console.print(f"Critic: {outcomes.count('first draft')} passed first draft, {outcomes.count('fixed')} fixed by "
+                  f"revision, {outcomes.count('unresolved')} unresolved (verification note), "
+                  f"{outcomes.count('not run')} not run")
+    wrong = [r["id"] for r in rows if r.get("wrong_figure")]
+    console.print(f"Wrong figures published: {len(wrong)}" + (f"  -> {', '.join(wrong)}" if wrong else ""),
+                  style="red" if wrong else "green")
 
 
 if __name__ == "__main__":

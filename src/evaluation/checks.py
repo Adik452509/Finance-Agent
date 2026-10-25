@@ -19,6 +19,27 @@ class CheckResult:
     passed: bool
     failures: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    wrong_figure: bool = False                          # a known-wrong figure reached the report
+    critic: dict = field(default_factory=dict)          # see critic_metrics()
+
+
+def critic_metrics(final: dict) -> dict:
+    """How the Phase 5 critic loop went for one run.
+
+    outcome: "first draft" (passed at once), "fixed" (passed after revision),
+             "unresolved" (still failing: report has a verification note), or "not run".
+    """
+    rounds = final.get("critic_rounds", 0)
+    verdict = (final.get("critique") or {}).get("verdict")
+    if not rounds:
+        outcome = "not run"
+    elif verdict == "pass":
+        outcome = "first draft" if rounds == 1 else "fixed"
+    else:
+        outcome = "unresolved"
+    return {"outcome": outcome, "rounds": rounds, "revisions": final.get("revisions", 0),
+            "open_issues": len((final.get("critique") or {}).get("issues", [])),
+            "checked_by": (final.get("critique") or {}).get("checked_by", [])}
 
 
 def body_of(report: str) -> str:
@@ -45,14 +66,19 @@ def check_result(expect: dict, final: dict) -> CheckResult:
     numbers = expect.get("numbers") or []
     if numbers and not any(has_number(report, n) for n in numbers):
         failures.append(f"expected figure missing (any of {numbers})")
+    wrong_figure = False
     for wrong in expect.get("must_not") or []:
         if has_number(report, wrong.rstrip("%")):
             failures.append(f"contains known-wrong figure {wrong}")
+            wrong_figure = True
 
     used = {c["name"] for c in final.get("tool_calls", []) if c.get("ok") is not False}
     missing_tools = [t for t in expect.get("tools") or [] if t not in used]
     if missing_tools:
         failures.append(f"required tools not used successfully: {missing_tools}")
+    any_of = expect.get("tools_any") or []
+    if any_of and not used & set(any_of):
+        failures.append(f"none of these tools was used successfully: {any_of}")
 
     route = expect.get("route")
     if route and final.get("route") != route:
@@ -70,4 +96,5 @@ def check_result(expect: dict, final: dict) -> CheckResult:
     warnings = final.get("warnings", [])
     if warnings:
         notes.append(f"{len(warnings)} warning(s): " + " | ".join(w[:90] for w in warnings))
-    return CheckResult(passed=not failures, failures=failures, notes=notes)
+    return CheckResult(passed=not failures, failures=failures, notes=notes,
+                       wrong_figure=wrong_figure, critic=critic_metrics(final))

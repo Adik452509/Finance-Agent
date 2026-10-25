@@ -107,6 +107,39 @@ def test_warnings_are_reported_but_do_not_fail():
     assert r.passed and r.notes and "analyst returned no text" in r.notes[0]
 
 
+def test_tools_any_accepts_either_tool():
+    margin = next(q for q in QUESTIONS if q["id"] == "apple_net_margin")["expect"]
+    assert check_result(margin, final("Net margin was 26.92%.", ("search_filings", "share_of_total"))).passed
+    assert check_result(margin, final("Net margin was 0.2692.", ("search_filings", "ratio"))).passed
+    r = check_result(margin, final("Net margin was 26.92%.", ("search_filings",)))
+    assert not r.passed and any("none of these tools" in f for f in r.failures)
+
+
+def test_wrong_figure_is_flagged_separately():
+    r = check_result(GROWTH, final("Revenue grew 48.11%.", ("search_filings", "percent_change")))
+    assert r.wrong_figure is True
+    r = check_result(GROWTH, final("Revenue figures could not be verified.", ("search_filings", "percent_change")))
+    assert r.wrong_figure is False and not r.passed  # an honest miss is a fail, but not a wrong figure
+
+
+def test_critic_outcomes():
+    from src.evaluation.checks import critic_metrics
+
+    assert critic_metrics({})["outcome"] == "not run"
+    assert critic_metrics({"critic_rounds": 1, "critique": {"verdict": "pass", "issues": []}})["outcome"] == "first draft"
+    fixed = critic_metrics({"critic_rounds": 2, "revisions": 1, "critique": {"verdict": "pass", "issues": []}})
+    assert fixed["outcome"] == "fixed" and fixed["revisions"] == 1
+    stuck = critic_metrics({"critic_rounds": 3, "revisions": 2,
+                            "critique": {"verdict": "fail", "issues": [{"problem": "x"}], "checked_by": ["code"]}})
+    assert stuck["outcome"] == "unresolved" and stuck["open_issues"] == 1 and stuck["checked_by"] == ["code"]
+
+
+def test_new_phase5_questions_are_present():
+    ids = {q["id"] for q in QUESTIONS}
+    assert {"ril_total_assets", "toy_revenue_middle_column", "apple_net_margin", "ril_profit_for_the_year"} <= ids
+    assert len(QUESTIONS) == 12
+
+
 def test_empty_report_fails():
     r = check_result({"numbers": [], "must_not": [], "tools": [], "route": None}, {"report": "No report could be produced."})
     assert not r.passed
