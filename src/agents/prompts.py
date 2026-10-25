@@ -127,6 +127,25 @@ ANALYSIS:
 - <what was computed>: <result> (formula: <formula>; inputs: <figures with their source tags>)
 """
 
+CRITIC_PROMPT = """You are the CRITIC of a financial research team. Check the DRAFT answer against the FACT NOTES and
+ANALYSIS it was written from. The fact notes and analysis are the only evidence; treat them as correct.
+
+For every statement in the draft, check:
+- the figure is attached to the right metric (e.g. revenue vs value of sales vs profit);
+- the PERIOD is right (a growth from 2023-24 to 2024-25 happened in 2024-25, not 2023-24);
+- the SCOPE is right (consolidated vs standalone vs one segment);
+- the UNIT and SCALE are right (crore vs million vs billion; JPY millions; currency);
+- the direction words match the numbers ("grew" for an increase, "fell" for a decrease);
+- calculated values match the ANALYSIS exactly;
+- nothing is claimed that the evidence does not support (no outside knowledge, no investment advice).
+Do NOT comment on style, wording or length. Lines marked UNVERIFIED are not evidence.
+
+Reply with ONLY this JSON object:
+{"verdict": "pass" or "fail",
+ "issues": [{"claim": "the exact wrong statement", "problem": "what is wrong", "fix": "what it should say"}]}
+Use "pass" with an empty issues list when every statement is supported. List at most 5 issues.
+"""
+
 WRITER_PROMPT = """You are the WRITER of a financial research team. Write the final answer to the user's question
 using ONLY the fact notes and analysis provided.
 

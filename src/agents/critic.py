@@ -17,7 +17,17 @@ An issue is a dict: {"claim", "problem", "fix", "source": "code" | "llm"}.
 import re
 from decimal import Decimal, InvalidOperation
 
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import HumanMessage, SystemMessage
+
 from src.agents.citations import SOURCE_ID_RE
+from src.agents.nodes import format_findings
+from src.agents.prompts import CRITIC_PROMPT
+from src.agents.state import PlanError, ResearchState, extract_json
+from src.agents.toolloop import count_tokens
+from src.rag.qa import _message_text
+
+MAX_ISSUES = 5
 
 LABEL_RE = re.compile(r"\[([^\[\]\n]{1,120})\](?!\()")
 SOURCE_TAG_RE = re.compile(r"\[[A-Z0-9.^-]+ p\d+\]")
@@ -105,3 +115,63 @@ def code_checks(draft: str, findings: list[dict], analysis: str, citations: dict
                     issues.append({"claim": _claim(line), "problem": f"[{part}] is not a retrieved source",
                                    "fix": "cite only the source tags given in the fact notes", "source": "code"})
     return issues
+
+
+# --- Layer 2: LLM judge ------------------------------------------------------------------------
+
+
+def parse_verdict(text: str) -> dict | None:
+    """Turn the judge's reply into {"verdict", "issues"}; None if unusable.
+
+    Normalised so the verdict always agrees with the issues: "pass" with issues
+    becomes "fail"; "fail" without any usable issue becomes "pass" (nothing to fix).
+    """
+    try:
+        data = extract_json(text)
+    except PlanError:
+        return None
+    verdict = str(data.get("verdict", "")).strip().lower()
+    if verdict not in ("pass", "fail"):
+        return None
+    issues = []
+    for item in data.get("issues") or []:
+        if isinstance(item, dict) and str(item.get("problem", "")).strip():
+            issues.append({"claim": str(item.get("claim", ""))[:200], "problem": str(item["problem"])[:300],
+                           "fix": str(item.get("fix", ""))[:300], "source": "llm"})
+    issues = issues[:MAX_ISSUES]
+    return {"verdict": "fail" if issues else "pass", "issues": issues}
+
+
+def _judge_brief(state: ResearchState) -> str:
+    return (f"Question: {state.get('question', '')}\n\nFACT NOTES:\n{format_findings(state.get('findings', []))}\n\n"
+            f"ANALYSIS:\n{state.get('analysis') or '(none)'}\n\nDRAFT:\n{state.get('draft', '')}")
+
+
+def make_critic(llm: BaseChatModel | None):
+    """Critic node: code checks first; the LLM judge only if the code checks pass (saves tokens)."""
+
+    async def critic(state: ResearchState) -> dict:
+        issues = code_checks(state.get("draft", ""), state.get("findings", []), state.get("analysis", ""),
+                             state.get("citations", {}))
+        checked_by, warnings, tokens = ["code"], [], 0
+
+        if not issues and llm is not None and state.get("draft", "").strip():
+            try:
+                reply = await llm.ainvoke([SystemMessage(CRITIC_PROMPT), HumanMessage(_judge_brief(state))])
+                tokens = count_tokens(reply)
+                verdict = parse_verdict(_message_text(reply.content))
+                if verdict is None:
+                    warnings.append("critic: the judge's reply was not valid JSON; using the code checks only")
+                else:
+                    issues = verdict["issues"]
+                    checked_by.append("llm")
+            except Exception as e:  # a broken judge must not block the report
+                warnings.append(f"critic: the judge failed ({type(e).__name__}); using the code checks only")
+
+        critique = {"verdict": "fail" if issues else "pass", "issues": issues, "checked_by": checked_by}
+        update = {"critique": critique, "warnings": warnings}
+        if tokens:
+            update["usage"] = {"critic": tokens}
+        return update
+
+    return critic

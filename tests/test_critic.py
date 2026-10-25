@@ -1,6 +1,11 @@
-"""Phase 5 critic, layer 1: code checks of the draft against the evidence. Offline."""
+"""Phase 5 critic: layer 1 (code checks) and layer 2 (LLM judge, scripted). Offline."""
 
-from src.agents.critic import code_checks, figures
+import asyncio
+
+from langchain_core.messages import AIMessage
+
+from src.agents.critic import code_checks, figures, make_critic, parse_verdict
+from tests.conftest import scripted
 
 FINDINGS = [{"step_id": 1, "kind": "filings", "goal": "Revenue both years", "facts":
              "- Revenue from Operations (2024-25, consolidated): 9,80,136 INR crore [RELIANCE.NS p100]\n"
@@ -88,3 +93,82 @@ def test_market_and_news_citations_count():
 def test_each_problem_is_reported_once():
     draft = "Revenue was ₹12,345 crore. Again ₹12,345 crore."
     assert len(check(draft)) == 1
+
+
+# --- layer 2: verdict parsing --------------------------------------------------------------------
+
+PERIOD_ISSUE = ('{"verdict": "fail", "issues": [{"claim": "grew 7.18% in 2023-24", '
+                '"problem": "the growth happened in 2024-25", "fix": "grew 7.18% in 2024-25"}]}')
+
+
+def test_parse_pass_and_fail():
+    assert parse_verdict('{"verdict": "pass", "issues": []}') == {"verdict": "pass", "issues": []}
+    v = parse_verdict(PERIOD_ISSUE)
+    assert v["verdict"] == "fail" and v["issues"][0]["source"] == "llm" and "2024-25" in v["issues"][0]["fix"]
+
+
+def test_parse_handles_fences_and_normalises_contradictions():
+    assert parse_verdict("```json\n" + PERIOD_ISSUE + "\n```")["verdict"] == "fail"
+    # "pass" but issues listed -> fail; "fail" with nothing usable -> pass (nothing to fix)
+    assert parse_verdict('{"verdict": "PASS", "issues": [{"problem": "wrong unit"}]}')["verdict"] == "fail"
+    assert parse_verdict('{"verdict": "fail", "issues": [{"claim": "x"}]}') == {"verdict": "pass", "issues": []}
+
+
+def test_parse_rejects_unusable_replies():
+    for bad in ("looks fine to me", '{"verdict": "maybe"}', "[1, 2]", ""):
+        assert parse_verdict(bad) is None
+
+
+def test_parse_caps_the_number_of_issues():
+    many = '{"verdict": "fail", "issues": [' + ",".join(f'{{"problem": "p{i}"}}' for i in range(9)) + "]}"
+    assert len(parse_verdict(many)["issues"]) == 5
+
+
+# --- layer 2: the critic node ----------------------------------------------------------------------
+
+STATE = {"question": "Reliance revenue growth?", "findings": FINDINGS, "analysis": ANALYSIS,
+         "citations": CITATIONS, "draft": GOOD}
+
+
+def run_critic(llm, state=STATE):
+    return asyncio.run(make_critic(llm)(state))
+
+
+def test_code_issues_skip_the_llm_to_save_tokens():
+    judge = scripted()
+    out = run_critic(judge, {**STATE, "draft": "Revenue was ₹12,345 crore."})
+    assert judge.seen == [] and out["warnings"] == []  # the judge was never contacted
+    assert out["critique"]["verdict"] == "fail" and out["critique"]["checked_by"] == ["code"]
+    assert out["critique"]["issues"][0]["source"] == "code" and "usage" not in out
+
+
+def test_llm_judge_catches_a_meaning_level_error():
+    judge = scripted(AIMessage(content=PERIOD_ISSUE, usage_metadata={"input_tokens": 1500, "output_tokens": 80, "total_tokens": 1580}))
+    out = run_critic(judge)
+    assert out["critique"]["verdict"] == "fail" and out["critique"]["checked_by"] == ["code", "llm"]
+    assert out["critique"]["issues"][0]["problem"] == "the growth happened in 2024-25"
+    assert out["usage"] == {"critic": 1580}
+    sent = judge.seen[0][1].content
+    assert "DRAFT:" in sent and "₹9,80,136" in sent and "ANALYSIS:" in sent
+
+
+def test_clean_draft_passes_both_layers():
+    out = run_critic(scripted(AIMessage(content='{"verdict": "pass", "issues": []}')))
+    assert out["critique"] == {"verdict": "pass", "issues": [], "checked_by": ["code", "llm"]}
+
+
+def test_unreadable_judge_reply_falls_back_to_code_checks():
+    out = run_critic(scripted(AIMessage(content="I think it is mostly fine.")))
+    assert out["critique"]["verdict"] == "pass" and out["critique"]["checked_by"] == ["code"]
+    assert any("not valid JSON" in w for w in out["warnings"])
+
+
+def test_judge_failure_does_not_block_the_report():
+    from tests.test_nodes import TOO_LARGE, raising
+
+    out = run_critic(raising(TOO_LARGE))
+    assert out["critique"]["verdict"] == "pass" and any("judge failed" in w for w in out["warnings"])
+
+
+def test_critic_without_llm_uses_code_checks_only():
+    assert run_critic(None)["critique"]["checked_by"] == ["code"]
