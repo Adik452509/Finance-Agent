@@ -67,7 +67,11 @@ def show_update(node: str, update: dict) -> None:
         console.print("[bold magenta]ANALYST[/bold magenta]")
         console.print(escape("  " + (update["analysis"] or "(empty)").replace("\n", "\n  ")))
     elif node == "writer":
-        console.print(Panel(Markdown(update["report"]), title="REPORT (writer)", border_style="green"))
+        revision = update.get("revisions")
+        label = f"revision {revision}" if revision else "first draft"
+        console.print(f"[bold magenta]WRITER[/bold magenta] → {label} ({len(update.get('draft', ''))} characters)")
+    elif node == "finalize":
+        console.print(Panel(Markdown(update["report"]), title="REPORT", border_style="green"))
     for w in update.get("warnings", []):
         console.print(f"  [yellow]! {escape(w)}[/yellow]")
 

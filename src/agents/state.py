@@ -94,7 +94,10 @@ class ResearchState(TypedDict, total=False):
     route: str                                                  # supervisor's decision: "analyst" or "writer"
     findings: Annotated[list[Finding], operator.add]
     analysis: str
-    report: str
+    draft: str                                                  # writer's text, citations still as [TICKER pN]
+    critique: dict                                              # critic's latest verdict (Phase 5)
+    revisions: int                                              # how many times the writer has revised
+    report: str                                                 # final text: citations expanded + disclaimer
     citations: Annotated[dict[str, str], merge_dicts]           # source_id -> full citation
     tool_calls: Annotated[list[ToolCallRecord], operator.add]
     warnings: Annotated[list[str], operator.add]

@@ -1,7 +1,10 @@
 """The Phase 4 multi-agent graph.
 
-    START -> planner -> researcher -> supervisor --needs calculation--> analyst -> writer -> END
-                                                 +--otherwise--------------------> writer -> END
+    START -> planner -> researcher -> supervisor --needs calculation--> analyst -> writer -> finalize -> END
+                                                 +--otherwise--------------------> writer -> finalize -> END
+
+finalize is code only: it expands citations and adds the disclaimer, so the writer's
+draft keeps short [TICKER pN] labels that the Phase 5 critic can check.
 
 The supervisor is deliberately plain code, not an LLM: routing on the plan's
 needs_calculation flag is predictable, free (no tokens) and easy to debug.
@@ -20,7 +23,9 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
 from langgraph.graph import END, START, StateGraph
 
-from src.agents.nodes import CALC_TOOLS, Events, make_analyst, make_planner, make_researcher, make_writer, only
+from src.agents.nodes import (
+    CALC_TOOLS, Events, finalize, make_analyst, make_planner, make_researcher, make_writer, only,
+)
 from src.agents.state import ResearchState
 
 # agent -> config.llm role ("default" = gpt-oss-20b, "reasoning" = gpt-oss-120b on Groq)
@@ -62,11 +67,13 @@ def build_graph(tools: list[BaseTool], llms: dict[str, BaseChatModel] | None = N
     g.add_node("supervisor", make_supervisor(has_calculator=bool(only(tools, CALC_TOOLS))))
     g.add_node("analyst", make_analyst(llms["analyst"], tools, on_event=on_event))
     g.add_node("writer", make_writer(llms["writer"]))
+    g.add_node("finalize", finalize)
 
     g.add_edge(START, "planner")
     g.add_edge("planner", "researcher")
     g.add_edge("researcher", "supervisor")
     g.add_conditional_edges("supervisor", lambda state: state["route"], {"analyst": "analyst", "writer": "writer"})
     g.add_edge("analyst", "writer")
-    g.add_edge("writer", END)
+    g.add_edge("writer", "finalize")
+    g.add_edge("finalize", END)
     return g.compile()

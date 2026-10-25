@@ -64,16 +64,18 @@ def _digits(text: str) -> str:
     return re.sub(r"\D", "", text)
 
 
-def check_facts_against_sources(facts: str, passages: dict[str, str]) -> list[str]:
+def fact_problems(facts: str, passages: dict[str, str]) -> list[tuple[int, str]]:
     """Cheap grounding check on the researcher's notes (an early, code-only Critic).
 
-    For every fact line that cites a filing passage:
+    Returns (line index, problem) pairs. For every fact line that cites a filing passage:
       - each figure in the line (3+ digits, not a year) must appear in that passage;
-      - a line saying "consolidated" must not cite a passage from the standalone statements.
-    Seen live: a "consolidated" revenue figure that was really the standalone "Value of Sales".
+      - a line saying "consolidated" must not cite a passage from the standalone statements;
+      - a company total must not come from a non-last column of a segment table.
+    Seen live: a "consolidated" revenue figure that was really the standalone "Value of Sales",
+    and O2C's segment column reported as the company total.
     """
-    warnings = []
-    for line in facts.splitlines():
+    problems: list[tuple[int, str]] = []
+    for i, line in enumerate(facts.splitlines()):
         tags = SOURCE_TAG_RE.findall(line)
         if not tags:
             continue
@@ -85,13 +87,45 @@ def check_facts_against_sources(facts: str, passages: dict[str, str]) -> list[st
         for figure in NUMBER_RE.findall(claim):
             d = _digits(figure)
             if len(d) >= 3 and not re.fullmatch(r"(19|20)\d{2}", d) and d not in source_numbers:
-                warnings.append(f"researcher: {figure} is not in its cited source {', '.join(tags)}")
+                problems.append((i, f"researcher: {figure} is not in its cited source {', '.join(tags)}"))
         upper = text.upper()
         if ("consolidated" in claim.lower() and "STANDALONE FINANCIAL STATEMENTS" in upper
                 and "CONSOLIDATED FINANCIAL STATEMENTS" not in upper):
-            warnings.append(f"researcher: a 'consolidated' figure cites a STANDALONE statement page ({', '.join(tags)})")
-        warnings += _segment_column_warnings(claim, text)
-    return warnings
+            problems.append((i, f"researcher: a 'consolidated' figure cites a STANDALONE statement page ({', '.join(tags)})"))
+        problems += [(i, w) for w in _segment_column_warnings(claim, text)]
+    return problems
+
+
+def check_facts_against_sources(facts: str, passages: dict[str, str]) -> list[str]:
+    return [message for _, message in fact_problems(facts, passages)]
+
+
+def mark_unverified(facts: str, problems: list[tuple[int, str]]) -> str:
+    """Quarantine flagged lines so the analyst and writer never use their figures."""
+    flagged = {i for i, _ in problems}
+    lines = facts.splitlines()
+    for i in flagged:
+        lines[i] = "- UNVERIFIED (failed the source check, do not use): " + lines[i].lstrip("- ").strip()
+    return "\n".join(lines)
+
+
+def correction_brief(problems: list[tuple[int, str]]) -> str:
+    """Tell the retry WHAT was wrong and WHERE to look instead.
+
+    Seen in the eval: a retry told only what was wrong picked the same segment-table figure again.
+    """
+    issues = "\n".join(f"- {message.removeprefix('researcher: ')}" for _, message in problems)
+    hints = []
+    if any("segment table" in m for _, m in problems):
+        hints.append('Search for "consolidated statement of profit and loss" (or the consolidated balance '
+                     "sheet) instead of the segment note, and take the company total from that statement.")
+    if any("STANDALONE" in m for _, m in problems):
+        hints.append('Search with the word "consolidated" in the query and use only pages from the '
+                     "CONSOLIDATED financial statements.")
+    if any("not in its cited source" in m for _, m in problems):
+        hints.append("Copy each figure exactly as the cited passage shows it, and cite the passage it came from.")
+    return ("\n\nYour previous notes for this step failed an automatic source check:\n" + issues +
+            "\nWhat to do now: " + " ".join(hints or ["Search again and write corrected notes."]))
 
 
 def _big_numbers(line: str) -> list[str]:
@@ -189,35 +223,52 @@ def make_researcher(llm: BaseChatModel, tools: list[BaseTool], max_rounds: int =
                     compact_older_results: int = 1500):
     research_tools = only(tools, RESEARCH_TOOLS)
 
+    async def run_step(brief: str):
+        messages = [SystemMessage(RESEARCHER_PROMPT), HumanMessage(brief)]
+        return await run_tool_loop(llm, research_tools, messages, agent="researcher", max_rounds=max_rounds,
+                                   compact_older_results=compact_older_results, on_event=on_event)
+
     async def researcher(state: ResearchState) -> dict:
         plan = Plan.model_validate(state["plan"])
         findings, calls, citations, warnings, tokens = [], [], {}, [], 0
         for step in plan.model_dump()["steps"]:  # sequential: parallel calls would burst the token limit
-            messages = [SystemMessage(RESEARCHER_PROMPT), HumanMessage(_step_brief(state["question"], step))]
-            try:
-                result = await run_tool_loop(llm, research_tools, messages, agent="researcher",
-                                             max_rounds=max_rounds, compact_older_results=compact_older_results,
-                                             on_event=on_event)
-            except Exception as e:  # one failed step must not take down the whole report
-                reason = describe_error(e)
-                warnings.append(f"researcher step {step['id']} failed: {reason}")
-                findings.append({"step_id": step["id"], "kind": step["kind"], "goal": step["goal"],
-                                 "facts": f"- NOT FOUND: this research step failed ({reason})"})
-                continue
-            tokens += result.tokens
-            calls += result.calls
+            brief = _step_brief(state["question"], step)
             passages: dict[str, str] = {}
-            for name, content in result.results:
-                if name == "search_filings":
-                    collect_citations(content, citations)
-                    collect_passages(content, passages)
-            warnings += check_facts_against_sources(result.text, passages)
-            if not result.calls:
-                warnings.append(f"researcher step {step['id']}: no tool was used, so its notes are unverified")
-            if result.hit_cap:
-                warnings.append(f"researcher step {step['id']}: stopped at the {max_rounds}-round tool limit")
-            findings.append({"step_id": step["id"], "kind": step["kind"], "goal": step["goal"],
-                             "facts": result.text or "- NOT FOUND: the researcher returned no notes"})
+            facts, problems = "", []
+            # Attempt 1, then (only if the source check flags the notes) one corrected attempt.
+            # Seen in the eval: the checks caught both wrong answers, but nothing acted on them.
+            for attempt in (1, 2):
+                try:
+                    result = await run_step(brief if attempt == 1 else brief + correction_brief(problems))
+                except Exception as e:  # one failed step must not take down the whole report
+                    reason = describe_error(e)
+                    warnings.append(f"researcher step {step['id']} failed: {reason}")
+                    if attempt == 1:
+                        facts = f"- NOT FOUND: this research step failed ({reason})"
+                    break
+                tokens += result.tokens
+                calls += result.calls
+                for name, content in result.results:
+                    if name == "search_filings":
+                        collect_citations(content, citations)
+                        collect_passages(content, passages)
+                if not result.calls:
+                    warnings.append(f"researcher step {step['id']}: no tool was used, so its notes are unverified")
+                if result.hit_cap:
+                    warnings.append(f"researcher step {step['id']}: stopped at the {max_rounds}-round tool limit")
+                facts = result.text or "- NOT FOUND: the researcher returned no notes"
+                problems = fact_problems(facts, passages)
+                if not problems:
+                    if attempt == 2:
+                        warnings.append(f"researcher step {step['id']}: notes corrected after the source check")
+                    break
+                if attempt == 1:
+                    warnings += [f"{m} (retrying step {step['id']})" for _, m in problems]
+
+            if problems:  # still flagged after the retry: quarantine those lines
+                facts = mark_unverified(facts, problems)
+                warnings += [f"{m} - marked UNVERIFIED" for _, m in problems]
+            findings.append({"step_id": step["id"], "kind": step["kind"], "goal": step["goal"], "facts": facts})
         return {"findings": findings, "citations": citations, "tool_calls": calls,
                 "warnings": warnings, "usage": {"researcher": tokens}}
 
@@ -302,21 +353,56 @@ def analysis_from_tool_results(calls: list[dict], results: list[tuple[str, str]]
 # --- writer --------------------------------------------------------------------------------
 
 
+def critic_issues(state: ResearchState) -> list[dict]:
+    """Issues from the critic's latest verdict, if it failed the draft."""
+    critique = state.get("critique") or {}
+    return critique.get("issues", []) if critique.get("verdict") == "fail" else []
+
+
 def make_writer(llm: BaseChatModel):
+    """Writes the DRAFT (citations stay as [TICKER pN] so the critic can check them).
+
+    If the critic failed the previous draft, the writer revises it using the critic's issues.
+    """
+
     async def writer(state: ResearchState) -> dict:
         parts = [f"Question: {state['question']}", f"Fact notes:\n{format_findings(state.get('findings', []))}"]
         if state.get("analysis"):
             parts.append(state["analysis"])
-        reply = await llm.ainvoke([SystemMessage(WRITER_PROMPT), HumanMessage("\n\n".join(parts))])
-        text = normalize_answer(_message_text(reply.content))
-        report, unresolved = expand_citations(text, state.get("citations", {}))
+        issues = critic_issues(state)
+        revising = bool(issues and state.get("draft"))
+        if revising:
+            listed = "\n".join(f"- {i.get('claim', '')}: {i.get('problem', '')}" + (f" (fix: {i['fix']})" if i.get("fix") else "")
+                               for i in issues)
+            parts.append(f"Your previous draft:\n{state['draft']}\n\nA reviewer checked it against the fact notes "
+                         f"and analysis and found these problems:\n{listed}\n\nRewrite the answer so every problem "
+                         "is fixed. Use only the fact notes and analysis above.")
+        try:
+            reply = await llm.ainvoke([SystemMessage(WRITER_PROMPT), HumanMessage("\n\n".join(parts))])
+        except Exception as e:  # keep the previous draft rather than lose the answer
+            return {"warnings": [f"writer failed: {describe_error(e)}"]}
 
-        warnings = []
-        if not report:
-            warnings.append("writer returned an empty report (often a sign of hitting a token limit)")
-        if unresolved:
-            warnings.append(f"writer: citations that match no retrieved passage: {', '.join(sorted(set(unresolved)))}")
-        return {"report": with_disclaimer(report or "No report could be produced."),
-                "warnings": warnings, "usage": {"writer": count_tokens(reply)}}
+        update = {"draft": normalize_answer(_message_text(reply.content)), "usage": {"writer": count_tokens(reply)}}
+        if revising:
+            update["revisions"] = state.get("revisions", 0) + 1
+        return update
 
     return writer
+
+
+def finalize(state: ResearchState) -> dict:
+    """Code only: expand citations, report what couldn't be verified, add the disclaimer."""
+    draft = state.get("draft", "")
+    report, unresolved = expand_citations(draft, state.get("citations", {}))
+    warnings = []
+    if not report:
+        warnings.append("writer returned an empty report (often a sign of hitting a token limit)")
+    if unresolved:
+        warnings.append(f"writer: citations that match no retrieved passage: {', '.join(sorted(set(unresolved)))}")
+
+    issues = critic_issues(state)
+    if report and issues:  # the critic still wasn't satisfied after the allowed revisions
+        report += "\n\n**Verification note:** an automatic review could not confirm these points:\n" + "\n".join(
+            f"- {i.get('claim', '')}: {i.get('problem', '')}" for i in issues)
+        warnings.append(f"critic: {len(issues)} issue(s) remain after {state.get('revisions', 0)} revision(s)")
+    return {"report": with_disclaimer(report or "No report could be produced."), "warnings": warnings}

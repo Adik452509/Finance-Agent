@@ -235,9 +235,66 @@ def test_planner_api_failure_uses_the_fallback_plan():
     assert any("daily token budget" in w for w in out["warnings"])
 
 
+def segment_search(query: str, ticker: str | None = None, k: int = 5) -> str:
+    """Search annual reports."""
+    return json.dumps({"ok": True, "results": [{"source_id": "RELIANCE.NS p130", "citation": "RIL p130",
+                                                "text": SEGMENT_PAGE}]})
+
+
+SEGMENT_TOOLS = [StructuredTool.from_function(segment_search, name="search_filings"),
+                 StructuredTool.from_function(percent_change)]
+WRONG_TOTAL = "- Revenue from Operations (2024-25, consolidated): 6,05,006 INR crore [RELIANCE.NS p130]"
+RIGHT_TOTAL = "- Revenue from Operations (2024-25, consolidated): 9,80,136 INR crore [RELIANCE.NS p130]"
+
+
+def test_flagged_notes_trigger_one_corrected_retry():
+    # The eval's failure: the check caught the O2C column, but nothing acted on it.
+    model = scripted(tool_call("search_filings", {"query": "revenue"}), AIMessage(content=WRONG_TOTAL),
+                     tool_call("search_filings", {"query": "revenue total"}, call_id="c2"), AIMessage(content=RIGHT_TOTAL))
+    out = run(make_researcher(model, SEGMENT_TOOLS), plan_state())
+    assert out["findings"][0]["facts"] == RIGHT_TOTAL
+    assert any("retrying step 1" in w for w in out["warnings"])
+    assert any("corrected after the source check" in w for w in out["warnings"])
+    assert len(out["tool_calls"]) == 2
+    assert "failed an automatic source check" in model.seen[2][1].content  # retry brief names the problem
+
+
+def test_still_wrong_after_retry_is_quarantined_as_unverified():
+    model = scripted(tool_call("search_filings", {"query": "revenue"}), AIMessage(content=WRONG_TOTAL),
+                     tool_call("search_filings", {"query": "revenue"}, call_id="c2"), AIMessage(content=WRONG_TOTAL))
+    out = run(make_researcher(model, SEGMENT_TOOLS), plan_state())
+    assert out["findings"][0]["facts"].startswith("- UNVERIFIED (failed the source check, do not use):")
+    assert any("marked UNVERIFIED" in w for w in out["warnings"])
+
+
+def test_clean_notes_are_not_retried():
+    model = scripted(tool_call("search_filings", {"query": "revenue"}), AIMessage(content=RIGHT_TOTAL))
+    out = run(make_researcher(model, SEGMENT_TOOLS), plan_state())
+    assert out["findings"][0]["facts"] == RIGHT_TOTAL and len(model.seen) == 2 and out["warnings"] == []
+
+
+def test_correction_brief_says_where_to_look_instead():
+    from src.agents.nodes import correction_brief, fact_problems
+
+    segment = correction_brief(fact_problems(WRONG_TOTAL, {"RELIANCE.NS p130": SEGMENT_PAGE}))
+    assert "consolidated statement of profit and loss" in segment
+    standalone = correction_brief([(0, "researcher: a 'consolidated' figure cites a STANDALONE statement page (X p1)")])
+    assert "CONSOLIDATED financial statements" in standalone
+
+
+def test_only_flagged_lines_are_quarantined():
+    from src.agents.nodes import fact_problems, mark_unverified
+
+    facts = RIGHT_TOTAL + "\n" + WRONG_TOTAL
+    marked = mark_unverified(facts, fact_problems(facts, {"RELIANCE.NS p130": SEGMENT_PAGE}))
+    assert marked.splitlines()[0] == RIGHT_TOTAL
+    assert marked.splitlines()[1].startswith("- UNVERIFIED")
+
+
 def test_researcher_runs_the_fact_check():
-    model = scripted(tool_call("search_filings", {"query": "revenue", "ticker": "RELIANCE.NS"}),
-                     AIMessage(content="- Revenue (2024-25, consolidated): ₹1,23,456 crore [RELIANCE.NS p100]"))
+    bad = "- Revenue (2024-25, consolidated): ₹1,23,456 crore [RELIANCE.NS p100]"
+    model = scripted(tool_call("search_filings", {"query": "revenue", "ticker": "RELIANCE.NS"}), AIMessage(content=bad),
+                     tool_call("search_filings", {"query": "revenue"}, call_id="c2"), AIMessage(content=bad))
     out = run(make_researcher(model, TOOLS), plan_state())
     assert any("1,23,456" in w for w in out["warnings"])
 
@@ -267,21 +324,59 @@ def test_analyst_warns_without_calculator_and_cannot_search():
 # --- writer ----------------------------------------------------------------------------------
 
 
-def test_writer_expands_citations_and_adds_disclaimer():
-    model = scripted(AIMessage(content="Revenue grew 7.18%.\n- 2024-25: ₹9,80,136 crore [RELIANCE.NS p100]",
-                               usage_metadata={"input_tokens": 900, "output_tokens": 100, "total_tokens": 1000}))
-    state = {"question": "q", "findings": [], "citations": {"RELIANCE.NS p100": RIL_CITATION}, "analysis": "ANALYSIS: 7.18%"}
+DRAFT = "Revenue grew 7.18%.\n- 2024-25: ₹9,80,136 crore [RELIANCE.NS p100]"
+
+
+def test_writer_produces_a_draft_with_short_labels():
+    model = scripted(AIMessage(content=DRAFT, usage_metadata={"input_tokens": 900, "output_tokens": 100, "total_tokens": 1000}))
+    state = {"question": "q", "findings": [], "analysis": "ANALYSIS: 7.18%"}
     out = run(make_writer(model), state)
-    assert f"({RIL_CITATION})" in out["report"] and out["report"].endswith(DISCLAIMER)
-    assert out["usage"] == {"writer": 1000} and out["warnings"] == []
+    assert out["draft"] == DRAFT and "[RELIANCE.NS p100]" in out["draft"]  # not expanded yet: the critic needs labels
+    assert out["usage"] == {"writer": 1000} and "revisions" not in out
     assert "ANALYSIS: 7.18%" in model.seen[0][1].content
 
 
-def test_writer_flags_unknown_labels_and_empty_reports():
-    out = run(make_writer(scripted(AIMessage(content="Price ¥3,105 [get_quote]"))), {"question": "q", "citations": {}})
-    assert any("get_quote" in w for w in out["warnings"])
-    out = run(make_writer(scripted(AIMessage(content=""))), {"question": "q"})
+def test_writer_revises_using_the_critics_issues():
+    model = scripted(AIMessage(content="Revenue grew 7.18% in 2024-25 [RELIANCE.NS p100]."))
+    state = {"question": "q", "draft": "Revenue grew 7.18% in 2023-24.", "revisions": 0,
+             "critique": {"verdict": "fail", "issues": [{"claim": "grew 7.18% in 2023-24", "problem": "wrong period",
+                                                         "fix": "the growth is for 2024-25"}]}}
+    out = run(make_writer(model), state)
+    sent = model.seen[0][1].content
+    assert "Your previous draft:\nRevenue grew 7.18% in 2023-24." in sent and "wrong period" in sent
+    assert out["revisions"] == 1
+
+
+def test_writer_failure_keeps_the_previous_draft():
+    out = run(make_writer(raising(TOO_LARGE)), {"question": "q", "draft": "old draft"})
+    assert "draft" not in out and any("writer failed" in w for w in out["warnings"])
+
+
+def test_finalize_expands_citations_and_adds_disclaimer():
+    from src.agents.nodes import finalize
+
+    out = finalize({"draft": DRAFT, "citations": {"RELIANCE.NS p100": RIL_CITATION}})
+    assert f"({RIL_CITATION})" in out["report"] and out["report"].endswith(DISCLAIMER)
+    assert out["warnings"] == []
+
+
+def test_finalize_flags_unknown_labels_and_empty_drafts():
+    from src.agents.nodes import finalize
+
+    assert any("get_quote" in w for w in finalize({"draft": "Price ¥3,105 [get_quote]", "citations": {}})["warnings"])
+    out = finalize({"draft": ""})
     assert out["report"].startswith("No report could be produced.") and any("empty report" in w for w in out["warnings"])
+
+
+def test_finalize_adds_a_verification_note_when_the_critic_is_still_unhappy():
+    from src.agents.nodes import finalize
+
+    state = {"draft": "Revenue grew 9%.", "revisions": 2,
+             "critique": {"verdict": "fail", "issues": [{"claim": "grew 9%", "problem": "not in the analysis"}]}}
+    out = finalize(state)
+    assert "**Verification note:**" in out["report"] and "grew 9%: not in the analysis" in out["report"]
+    assert any("remain after 2 revision(s)" in w for w in out["warnings"])
+    assert "Verification note" not in finalize({"draft": "ok", "critique": {"verdict": "pass", "issues": []}})["report"]
 
 
 def test_tool_sets_do_not_overlap_and_format_findings():

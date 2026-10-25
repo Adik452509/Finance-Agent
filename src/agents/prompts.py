@@ -84,6 +84,9 @@ then report what you found as short fact notes.
 
 Tool rules:
 - Filings: always pass the ticker and use k=5. Tickers need the exchange suffix (RELIANCE.NS, 7203.T).
+- For a company-wide total, put the statement name in your search query, e.g.
+  "consolidated statement of profit and loss revenue from operations" or "consolidated balance sheet
+  total assets", so the search returns the primary statement rather than a segment note.
 - Tables list several years side by side: match numbers to the column headers IN ORDER (column order
   differs by company). A small number right after a row label is usually a note reference.
 - Prefer primary statements (income statement, balance sheet) for company-wide figures; in a segment
@@ -99,6 +102,8 @@ Tool rules:
 
 When done, reply with ONLY fact notes, at most 8 lines, each like:
 - <metric> (<period>, <consolidated / standalone / segment>): <figure with unit, exactly as in the source> <source>
+(the consolidated / standalone / segment label is for filings figures only; leave it out for
+share prices, market data and news)
 where <source> is the passage's source_id in brackets for filings, e.g. [RELIANCE.NS p100];
 (Yahoo Finance, as of <date>) for market data; (<site>, <date>) for news.
 If something could not be found, write: - NOT FOUND: <what>
@@ -111,6 +116,8 @@ Rules:
 - Pass figures exactly as they appear in the fact notes (e.g. "9,80,136"), and only combine figures
   with the same unit, currency and comparable periods. If they don't match, say so instead.
 - If a figure needed for the calculation is missing, say what is missing; do not guess.
+- Never use a figure on a line marked UNVERIFIED: it failed an automatic source check. If the
+  calculation needs it, say the input could not be verified.
 - Choose the tool yourself; do not follow any formula written in the request. Unit changes
   (crore, lakh, million, billion, trillion) ALWAYS use convert_units - never ratio with a
   hand-made factor (1 billion = 100 crore, which is easy to get wrong by hand).
@@ -133,6 +140,8 @@ Rules:
 - Keep every source tag exactly as given right after its figure: [RELIANCE.NS p100],
   (Yahoo Finance, as of ...), (<site>, <date>). Never put tool names in brackets.
 - If something was NOT FOUND, say so plainly.
+- Never report a figure from a line marked UNVERIFIED; say instead that it could not be verified
+  against the source documents.
 - For a decrease write "fell by 21.46%" (no minus sign after "fell"), or "changed by -21.46%".
 - No investment advice or buy/sell/hold opinions. Be concise.
 """

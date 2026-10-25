@@ -76,7 +76,7 @@ def test_pipeline_runs_agents_in_the_right_order():
     async def order():
         return [node for update in [u async for u in graph.astream({"question": "q"}, stream_mode="updates")] for node in update]
 
-    assert asyncio.run(order()) == ["planner", "researcher", "supervisor", "analyst", "writer"]
+    assert asyncio.run(order()) == ["planner", "researcher", "supervisor", "analyst", "writer", "finalize"]
 
 
 def test_no_calculation_skips_the_analyst():
