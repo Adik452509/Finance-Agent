@@ -133,9 +133,13 @@ def parse_verdict(text: str) -> dict | None:
     verdict = str(data.get("verdict", "")).strip().lower()
     if verdict not in ("pass", "fail"):
         return None
-    issues = []
+    issues, seen = [], set()
     for item in data.get("issues") or []:
         if isinstance(item, dict) and str(item.get("problem", "")).strip():
+            key = (str(item.get("claim", "")).strip().lower(), str(item["problem"]).strip().lower())
+            if key in seen:  # seen live: the same unit problem listed twice
+                continue
+            seen.add(key)
             issues.append({"claim": str(item.get("claim", ""))[:200], "problem": str(item["problem"])[:300],
                            "fix": str(item.get("fix", ""))[:300], "source": "llm"})
     issues = issues[:MAX_ISSUES]

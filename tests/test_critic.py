@@ -119,6 +119,11 @@ def test_parse_rejects_unusable_replies():
         assert parse_verdict(bad) is None
 
 
+def test_parse_drops_duplicate_issues():
+    dup = '{"problem": "Unit is wrong; the source reports INR crore", "claim": "USD million"}'
+    assert len(parse_verdict('{"verdict": "fail", "issues": [' + dup + "," + dup + "]}")["issues"]) == 1
+
+
 def test_parse_caps_the_number_of_issues():
     many = '{"verdict": "fail", "issues": [' + ",".join(f'{{"problem": "p{i}"}}' for i in range(9)) + "]}"
     assert len(parse_verdict(many)["issues"]) == 5
