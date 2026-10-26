@@ -22,8 +22,8 @@
     {
       "id": "ril_retail_share",
       "question": "What share of Reliance's 2024-25 revenue from operations came from the Retail segment?",
-      "expect": {"numbers": ["29.69", "29.28"], "must_not": ["48.11"], "tools": ["search_filings", "share_of_total"], "route": "analyst"},
-      "notes": "29.69% = segment 2,91,043 / 9,80,136; 29.28% = Note 25 2,86,972 / 9,80,136. 48.11% = O2C column used as the total."
+      "expect": {"numbers": ["29.69", "29.28"], "must_not": ["48.11", "2.48"], "tools": ["search_filings", "share_of_total"], "route": "analyst"},
+      "notes": "29.69% = segment 2,91,043 / 9,80,136; 29.28% = Note 25 2,86,972 / 9,80,136. 48.11% = O2C column used as the total; 2.48% = Oil & Gas 2023-24 (24,331) read as Retail."
     },
     {
       "id": "apple_net_income_growth",

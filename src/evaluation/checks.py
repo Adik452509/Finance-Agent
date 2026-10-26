@@ -10,8 +10,10 @@ from decimal import Decimal
 
 REFUSAL_PHRASES = ("not found", "couldn't find", "could not find", "not available", "no data",
                    "not included", "not in the", "does not contain", "do not contain", "unavailable",
-                   "no information", "not reported", "not provided")
-NEWS_CITATION_RE = re.compile(r"\([a-z0-9.-]+\.[a-z]{2,},\s*[^)]*\d{4}[^)]*\)", re.I)
+                   "no information", "not reported", "not provided", "could not be verified",
+                   "could not verify", "cannot be determined", "could not be determined")
+# (site, date) - the writer sometimes wraps the site in <angle brackets> (seen live).
+NEWS_CITATION_RE = re.compile(r"\(<?[a-z0-9.-]+\.[a-z]{2,}>?,\s*[^)]*\d{4}[^)]*\)", re.I)
 
 
 @dataclass
@@ -64,9 +66,13 @@ def check_result(expect: dict, final: dict) -> CheckResult:
     failures, notes = [], []
 
     numbers = expect.get("numbers") or []
+    wrong_figure = False
     if numbers and not any(has_number(report, n) for n in numbers):
         failures.append(f"expected figure missing (any of {numbers})")
-    wrong_figure = False
+        # Missing figure + no admission of a gap = a confidently WRONG answer, even when the
+        # wrong number isn't one we predicted (seen in the eval: Oil & Gas's 24,331 as "Retail").
+        if not any(p in report.lower() for p in REFUSAL_PHRASES):
+            wrong_figure = True
     for wrong in expect.get("must_not") or []:
         if has_number(report, wrong.rstrip("%")):
             failures.append(f"contains known-wrong figure {wrong}")

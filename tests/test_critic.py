@@ -88,6 +88,7 @@ def test_market_and_news_citations_count():
     news = [{"step_id": 1, "kind": "news", "goal": "news",
              "facts": "- Toyota sold 201,306 vehicles (autoevolution.com, 23 Oct 2026)"}]
     assert check("Toyota sold 201,306 vehicles (autoevolution.com, 23 Oct 2026).", findings=news, analysis="") == []
+    assert check("Toyota sold 201,306 vehicles (<autoevolution.com>, 23 Oct 2026).", findings=news, analysis="") == []
 
 
 def test_each_problem_is_reported_once():

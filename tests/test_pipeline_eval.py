@@ -87,6 +87,8 @@ def test_news_must_be_cited_with_site_and_date():
     news = next(q for q in QUESTIONS if q["id"] == "toyota_news")["expect"]
     assert check_result(news, final("Toyota launched X (reuters.com, Fri, 23 Oct 2026).", ("search_news",), "writer")).passed
     assert not check_result(news, final("Toyota launched X.", ("search_news",), "writer")).passed
+    # Seen in the 5.6 eval: the writer kept the angle brackets of "(<site>, <date>)" - still a citation.
+    assert check_result(news, final("Toyota launched X (<autoblog.com>, 24 Oct 2026).", ("search_news",), "writer")).passed
 
 
 def test_refusal_question():
@@ -120,6 +122,14 @@ def test_wrong_figure_is_flagged_separately():
     assert r.wrong_figure is True
     r = check_result(GROWTH, final("Revenue figures could not be verified.", ("search_filings", "percent_change")))
     assert r.wrong_figure is False and not r.passed  # an honest miss is a fail, but not a wrong figure
+
+
+def test_an_unknown_wrong_answer_still_counts_as_a_wrong_figure():
+    # Seen in the 5.6 eval: 2.48% published (Oil & Gas 2023-24 read as Retail). It was not in
+    # must_not, so the old metric reported "Wrong figures published: 0".
+    share = next(q for q in QUESTIONS if q["id"] == "ril_retail_share")["expect"]
+    r = check_result(share, final("Retail contributed 1.23% of revenue.", ("search_filings", "share_of_total")))
+    assert r.wrong_figure is True and not r.passed
 
 
 def test_critic_outcomes():
