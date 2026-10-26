@@ -392,6 +392,57 @@ def test_repeated_search_results_are_kept_once():
     assert passages["RELIANCE.NS p130"].count("Segment Information") == 1
 
 
+# --- company guard: a step about one company must not use another company's filing ----------
+
+APPLE_FIGURE_FOR_MSFT = "- Total net sales (FY2025, consolidated): 416,161 USD millions [AAPL p32]"
+
+
+def test_company_check_flags_another_companys_page():
+    from src.agents.nodes import company_problems
+
+    assert company_problems(APPLE_FIGURE_FOR_MSFT, "MSFT")[0][0] == 0
+    assert "about MSFT" in company_problems(APPLE_FIGURE_FOR_MSFT, "MSFT")[0][1]
+    assert company_problems(FACTS, "RELIANCE.NS") == []
+    assert company_problems(FACTS, "reliance") == []      # suffix / case don't matter
+    assert company_problems(APPLE_FIGURE_FOR_MSFT, None) == []  # fallback plan: no ticker to compare
+
+
+def test_filings_step_for_an_unindexed_company_becomes_a_market_step():
+    # Seen live: asked about Microsoft, the planner chose filings; market data was never tried.
+    plan = ('{"steps": [{"kind": "filings", "ticker": "MSFT", "goal": "Revenue FY2025"}, '
+            '{"kind": "filings", "ticker": "RELIANCE.NS", "goal": "Revenue 2024-25"}], "needs_calculation": false}')
+    out = run(make_planner(scripted(AIMessage(content=plan)), companies="", known_tickers={"RELIANCE.NS", "AAPL"}),
+              {"question": "Compare Microsoft and Reliance revenue"})
+    msft, ril = out["plan"]["steps"]
+    assert msft["kind"] == "market" and "not in the library" in msft["goal"]
+    assert ril["kind"] == "filings" and ril["goal"] == "Revenue 2024-25"
+    assert any("no annual report indexed for MSFT" in w for w in out["warnings"])
+
+
+def test_each_step_only_gets_its_sources_tools():
+    steps = [{"id": 1, "kind": "market", "ticker": "MSFT", "goal": "Microsoft revenue"}]
+    model = scripted(tool_call("search_filings", {"query": "revenue"}), AIMessage(content="- NOT FOUND: revenue"))
+    out = run(make_researcher(model, TOOLS), plan_state(steps))
+    assert out["tool_calls"][0]["ok"] is False and "Unknown tool" in out["tool_calls"][0]["error"]
+    assert "Available tools: get_quote" in out["tool_calls"][0]["error"]
+
+
+def test_filings_search_gets_the_steps_ticker_when_left_out():
+    model = scripted(tool_call("search_filings", {"query": "revenue"}), AIMessage(content=FACTS))
+    out = run(make_researcher(model, TOOLS), plan_state())  # the step's ticker is RELIANCE.NS
+    assert out["tool_calls"][0]["args"]["ticker"] == "RELIANCE.NS" and out["warnings"] == []
+
+
+def test_another_companys_figure_is_retried_then_quarantined():
+    steps = [{"id": 1, "kind": "filings", "ticker": "MSFT", "goal": "Microsoft revenue FY2025"}]
+    model = scripted(tool_call("search_filings", {"query": "revenue", "ticker": "AAPL"}), AIMessage(content=APPLE_FIGURE_FOR_MSFT),
+                     tool_call("search_filings", {"query": "revenue", "ticker": "AAPL"}, call_id="c2"),
+                     AIMessage(content=APPLE_FIGURE_FOR_MSFT))
+    out = run(make_researcher(model, TOOLS), plan_state(steps))
+    assert out["findings"][0]["facts"].startswith("- UNVERIFIED")
+    assert "never use another company's figures" in model.seen[2][1].content
+
+
 def test_manual_unit_conversion_via_ratio_is_flagged():
     # Seen live: crore -> billion done as ratio(980136, 1000) = 980.136 (correct: 9,801.36).
     from src.agents.nodes import manual_conversion_warnings

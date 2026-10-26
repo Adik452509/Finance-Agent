@@ -52,8 +52,9 @@ The researcher can use three kinds of source:
 
 Annual reports are available for:
 <<COMPANIES>>
-Any other listed company can be researched with market data and news; tickers need the exchange
-suffix (AAPL, RELIANCE.NS, 7203.T, 0700.HK).
+Any other listed company can be researched with market data and news ONLY - never plan a filings
+step for a company that is not in the list above. Tickers need the exchange suffix (AAPL,
+RELIANCE.NS, 7203.T, 0700.HK, MSFT).
 
 Reply with ONLY this JSON object, no other text:
 {"steps": [{"kind": "market" or "filings" or "news", "ticker": "TICKER or null",
@@ -84,6 +85,8 @@ then report what you found as short fact notes.
 
 Tool rules:
 - Filings: always pass the ticker and use k=5. Tickers need the exchange suffix (RELIANCE.NS, 7203.T).
+- If search_filings says the ticker is unknown, there is no annual report for that company: write
+  NOT FOUND for the filings figures. Never use another company's passages instead.
 - For a company-wide total, put the statement name in your search query, e.g.
   "consolidated statement of profit and loss revenue from operations" or "consolidated balance sheet
   total assets", so the search returns the primary statement rather than a segment note.
@@ -166,7 +169,8 @@ Rules:
   "(calculated from the figures above)", never with a filing page.
 - Keep every source tag exactly as given right after its figure: [RELIANCE.NS p100],
   (Yahoo Finance, as of ...), (<site>, <date>). Never put tool names in brackets.
-- If something was NOT FOUND, say so plainly.
+- If something was NOT FOUND, say so plainly. When the notes say a company's annual report is not in
+  the library, say exactly that - never "not disclosed" (the company may well have disclosed it).
 - Never report a figure from a line marked UNVERIFIED; say instead that it could not be verified
   against the source documents.
 - For a decrease write "fell by 21.46%" (no minus sign after "fell"), or "changed by -21.46%".

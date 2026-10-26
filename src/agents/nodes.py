@@ -32,6 +32,11 @@ from src.rag.qa import _message_text, normalize_answer
 RESEARCH_TOOLS = {"get_quote", "get_quarterly_financials", "list_supported_markets",
                   "search_filings", "list_filings", "search_news"}
 CALC_TOOLS = {"percent_change", "cagr", "ratio", "share_of_total", "convert_units", "series_change"}
+# Each plan step gets only its source's tools (an "any" step gets all of RESEARCH_TOOLS).
+# Seen live: a market step for Microsoft still called search_filings, which could only fail.
+STEP_TOOLS = {"market": {"get_quote", "get_quarterly_financials", "list_supported_markets"},
+              "filings": {"search_filings", "list_filings"},
+              "news": {"search_news"}}
 
 Events = Callable[[str, dict], None] | None
 
@@ -45,6 +50,30 @@ def companies_context() -> str:
         f"figures in {d.reporting_unit}"
         for d in load_registry()
     )
+
+
+def indexed_tickers() -> set[str]:
+    from src.ingestion.loader import load_registry
+
+    return {d.ticker for d in load_registry()}
+
+
+def reroute_unindexed(plan: dict, known: set[str]) -> tuple[dict, list[str]]:
+    """Turn filings steps for companies with no indexed annual report into market steps.
+
+    Seen live: asked about Microsoft, the planner chose filings anyway; the search could only
+    fail, so market data (which covers any listed company) was never tried.
+    """
+    known_bases = {_base_ticker(t) for t in known}
+    notes = []
+    for step in plan["steps"]:
+        ticker = step.get("ticker")
+        if step["kind"] == "filings" and ticker and _base_ticker(ticker) not in known_bases:
+            step["kind"] = "market"
+            step["goal"] += (f" (no annual report for {ticker} is indexed: use market data - recent quarterly "
+                             f"figures - and say that annual-report figures are not in the library)")
+            notes.append(f"planner: no annual report indexed for {ticker}; filings step switched to market data")
+    return plan, notes
 
 
 SOURCE_TAG_RE = re.compile(r"\[([A-Z0-9.^-]+ p\d+)\]")
@@ -97,6 +126,27 @@ def fact_problems(facts: str, passages: dict[str, str]) -> list[tuple[int, str]]
                 and "CONSOLIDATED FINANCIAL STATEMENTS" not in upper):
             problems.append((i, f"researcher: a 'consolidated' figure cites a STANDALONE statement page ({', '.join(tags)})"))
         problems += [(i, w) for w in _segment_column_warnings(claim, text)]
+    return problems
+
+
+def _base_ticker(ticker: str) -> str:
+    return ticker.strip().upper().split(".")[0]  # "RELIANCE.NS" and "reliance" are the same company
+
+
+def company_problems(facts: str, ticker: str | None) -> list[tuple[int, str]]:
+    """Fact lines for one company's step that cite ANOTHER company's filing page.
+
+    A search without a ticker returns Apple / Reliance / Toyota pages for any question; a
+    figure copied from them passes the other checks (the number IS on the cited page).
+    """
+    if not ticker:
+        return []
+    problems = []
+    for i, line in enumerate(facts.splitlines()):
+        others = [t for t in SOURCE_TAG_RE.findall(line) if _base_ticker(t.split(" p")[0]) != _base_ticker(ticker)]
+        if others:
+            problems.append((i, f"researcher: this step is about {ticker} but the line cites another company's "
+                                f"filing ({', '.join(others)})"))
     return problems
 
 
@@ -176,6 +226,9 @@ def correction_brief(problems: list[tuple[int, str]]) -> str:
                      "CONSOLIDATED financial statements.")
     if any("not in its cited source" in m for _, m in problems):
         hints.append("Copy each figure exactly as the cited passage shows it, and cite the passage it came from.")
+    if any("another company's filing" in m for _, m in problems):
+        hints.append("Only use passages from this step's company. If search_filings has no annual report for it, "
+                     "write NOT FOUND for the filings figures - never use another company's figures.")
     if any("source check" in m for _, m in problems):
         hints.append("Read the table header to find the column for the requested segment and year, and take the "
                      "figure from that exact column and row.")
@@ -225,9 +278,10 @@ def only(tools: list[BaseTool], allowed: set[str]) -> list[BaseTool]:
 # --- planner -------------------------------------------------------------------------------
 
 
-def make_planner(llm: BaseChatModel, companies: str | None = None):
+def make_planner(llm: BaseChatModel, companies: str | None = None, known_tickers: set[str] | None = None):
     system = (PLANNER_PROMPT.replace("<<COMPANIES>>", companies if companies is not None else companies_context())
               .replace("<<MAX_STEPS>>", str(MAX_STEPS)))
+    known = known_tickers if known_tickers is not None else indexed_tickers()
 
     async def planner(state: ResearchState) -> dict:
         question = state["question"]
@@ -251,7 +305,8 @@ def make_planner(llm: BaseChatModel, companies: str | None = None):
                 else:
                     plan = fallback_plan(question)
                     warnings.append(f"planner failed twice ({e}); using a one-step fallback plan")
-        return {"plan": plan.model_dump(), "warnings": warnings, "usage": {"planner": tokens}}
+        plan_dict, notes = reroute_unindexed(plan.model_dump(), known)
+        return {"plan": plan_dict, "warnings": warnings + notes, "usage": {"planner": tokens}}
 
     return planner
 
@@ -279,10 +334,15 @@ def make_researcher(llm: BaseChatModel, tools: list[BaseTool], max_rounds: int =
     """verifier: optional stronger model for the LLM source check (run only when the code checks pass)."""
     research_tools = only(tools, RESEARCH_TOOLS)
 
-    async def run_step(brief: str):
+    async def run_step(brief: str, step: dict):
         messages = [SystemMessage(RESEARCHER_PROMPT), HumanMessage(brief)]
-        return await run_tool_loop(llm, research_tools, messages, agent="researcher", max_rounds=max_rounds,
-                                   compact_older_results=compact_older_results, on_event=on_event)
+        ticker = step.get("ticker")
+        # A filings search without a ticker returns other companies' pages: pin it to the step's company.
+        defaults = {"search_filings": {"ticker": ticker}} if ticker else None
+        step_tools = only(research_tools, STEP_TOOLS[step["kind"]]) if step["kind"] in STEP_TOOLS else research_tools
+        return await run_tool_loop(llm, step_tools, messages, agent="researcher", max_rounds=max_rounds,
+                                   compact_older_results=compact_older_results, on_event=on_event,
+                                   default_args=defaults)
 
     async def researcher(state: ResearchState) -> dict:
         plan = Plan.model_validate(state["plan"])
@@ -295,7 +355,7 @@ def make_researcher(llm: BaseChatModel, tools: list[BaseTool], max_rounds: int =
             # Seen in the eval: the checks caught both wrong answers, but nothing acted on them.
             for attempt in (1, 2):
                 try:
-                    result = await run_step(brief if attempt == 1 else brief + correction_brief(problems))
+                    result = await run_step(brief if attempt == 1 else brief + correction_brief(problems), step)
                 except Exception as e:  # one failed step must not take down the whole report
                     reason = describe_error(e)
                     warnings.append(f"researcher step {step['id']} failed: {reason}")
@@ -313,7 +373,7 @@ def make_researcher(llm: BaseChatModel, tools: list[BaseTool], max_rounds: int =
                 if result.hit_cap:
                     warnings.append(f"researcher step {step['id']}: stopped at the {max_rounds}-round tool limit")
                 facts = result.text or "- NOT FOUND: the researcher returned no notes"
-                problems = fact_problems(facts, passages)
+                problems = company_problems(facts, step.get("ticker")) + fact_problems(facts, passages)
                 if not problems and verifier is not None:  # code checks first: free, and they catch the obvious
                     problems, used, notes = await source_check(verifier, facts, passages)
                     verifier_tokens += used
