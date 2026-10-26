@@ -71,6 +71,11 @@ def test_label_that_was_never_retrieved_is_caught():
     assert any("[RELIANCE.NS p999] is not a retrieved source" in i["problem"] for i in issues)
 
 
+def test_placeholder_label_is_caught():
+    issues = check("Revenue for fiscal 2025 was NOT FOUND.[source]", analysis="")
+    assert any("placeholder" in i["problem"] for i in issues)
+
+
 def test_tool_name_label_is_caught():
     issues = check(GOOD + "\n- Source: [search_filings]")
     assert any("search_filings" in i["problem"] for i in issues)

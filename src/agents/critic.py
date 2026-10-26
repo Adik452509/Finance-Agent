@@ -36,6 +36,7 @@ TIME_RE = re.compile(r"\b\d{1,2}:\d{2}(?::\d{2})?\b")                        # 2
 NUMBER_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
 CITED_RE = re.compile(r"\[[A-Z0-9.^-]+ p\d+\]|\(Yahoo Finance|\(calculated|\(<?[a-z0-9.-]+\.[a-z]{2,}>?,", re.I)
 UNVERIFIED = "UNVERIFIED"
+PLACEHOLDER_LABELS = {"source", "sources", "citation", "citations", "ref", "reference", "cite"}
 
 
 def _value(token: str) -> Decimal | None:
@@ -111,7 +112,10 @@ def code_checks(draft: str, findings: list[dict], analysis: str, citations: dict
     for line in lines:
         for label in LABEL_RE.findall(line):
             for part in (p.strip() for p in re.split(r"[,;]", label)):
-                if SOURCE_ID_RE.match(part) and part not in citations:
+                if part.lower() in PLACEHOLDER_LABELS:  # seen live: "returned NOT FOUND.[source]"
+                    issues.append({"claim": _claim(line), "problem": f"[{part}] is a placeholder, not a source",
+                                   "fix": "remove it; cite only the source tags given in the fact notes", "source": "code"})
+                elif SOURCE_ID_RE.match(part) and part not in citations:
                     issues.append({"claim": _claim(line), "problem": f"[{part}] is not a retrieved source",
                                    "fix": "cite only the source tags given in the fact notes", "source": "code"})
     return issues
