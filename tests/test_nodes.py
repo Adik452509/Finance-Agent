@@ -299,6 +299,99 @@ def test_researcher_runs_the_fact_check():
     assert any("1,23,456" in w for w in out["warnings"])
 
 
+# --- LLM source check (Step 5.6) ----------------------------------------------------------------
+# The eval's published error: a figure that IS on the page, but from another segment's column.
+# The code checks can't see it (the number exists, the line says "segment"); the verifier can.
+
+WRONG_RETAIL = "- Revenue from Operations (2024-25, Retail segment): 24,881 INR crore [RELIANCE.NS p130]"
+RIGHT_RETAIL = "- Revenue from Operations (2024-25, Retail segment): 2,91,043 INR crore [RELIANCE.NS p130]"
+
+
+def verdicts(*supported, tokens=0):
+    results = [{"fact": i, "supported": s, "reason": "Oil and Gas column, not Retail" if not s else "ok"}
+               for i, s in enumerate(supported, start=1)]
+    return AIMessage(content=json.dumps({"results": results}),
+                     usage_metadata={"input_tokens": tokens, "output_tokens": 0, "total_tokens": tokens})
+
+
+def test_code_checks_cannot_see_a_figure_from_another_segment_column():
+    from src.agents.nodes import fact_problems
+
+    assert fact_problems(WRONG_RETAIL, {"RELIANCE.NS p130": SEGMENT_PAGE}) == []
+
+
+def test_source_check_flags_only_unsupported_filing_lines():
+    from src.agents.nodes import source_check
+
+    facts = "\n".join(["- Price: ¥3,105 (Yahoo Finance, as of 2026-10-24)", WRONG_RETAIL, RIGHT_TOTAL,
+                       "- UNVERIFIED (failed the source check, do not use): x 1,234 [RELIANCE.NS p130]"])
+    verifier = scripted(verdicts(False, True, tokens=3000))
+    problems, tokens, warnings = asyncio.run(source_check(verifier, facts, {"RELIANCE.NS p130": SEGMENT_PAGE}))
+    assert problems == [(1, "researcher: source check - Oil and Gas column, not Retail")]
+    assert tokens == 3000 and warnings == []
+    sent = verifier.seen[0][1].content
+    assert "SOURCE PAGE (RELIANCE.NS p130)" in sent and "6,05,006 24,881 2,91,043" in sent
+    assert "1. Revenue from Operations (2024-25, Retail segment): 24,881" in sent
+    assert "Yahoo" not in sent and "UNVERIFIED" not in sent  # only filings lines that are still in play
+
+
+def test_source_check_skips_the_call_when_nothing_cites_a_filing():
+    from src.agents.nodes import source_check
+
+    verifier = scripted()  # no replies: calling it would raise
+    assert asyncio.run(source_check(verifier, "- Price: ¥3,105 (Yahoo Finance, as of 2026-10-24)", {})) == ([], 0, [])
+    assert verifier.seen == []
+
+
+def test_a_broken_verifier_never_blocks_the_notes():
+    from src.agents.nodes import source_check
+
+    passages = {"RELIANCE.NS p130": SEGMENT_PAGE}
+    problems, _, warnings = asyncio.run(source_check(raising(TOO_LARGE), WRONG_RETAIL, passages))
+    assert problems == [] and "source check failed" in warnings[0]
+    problems, _, warnings = asyncio.run(source_check(scripted(AIMessage(content="looks fine")), WRONG_RETAIL, passages))
+    assert problems == [] and "not valid JSON" in warnings[0]
+
+
+def test_verifier_rejection_triggers_the_corrected_retry():
+    model = scripted(tool_call("search_filings", {"query": "retail"}), AIMessage(content=WRONG_RETAIL),
+                     tool_call("search_filings", {"query": "segment retail"}, call_id="c2"), AIMessage(content=RIGHT_RETAIL))
+    verifier = scripted(verdicts(False, tokens=3000), verdicts(True, tokens=2500))
+    out = run(make_researcher(model, SEGMENT_TOOLS, verifier=verifier), plan_state())
+    assert out["findings"][0]["facts"] == RIGHT_RETAIL
+    assert out["usage"] == {"researcher": 0, "verifier": 5500}
+    assert any("corrected after the source check" in w for w in out["warnings"])
+    assert "table header" in model.seen[2][1].content  # the retry brief says how to find the column
+
+
+def test_verifier_rejection_after_the_retry_quarantines_the_line():
+    model = scripted(tool_call("search_filings", {"query": "retail"}), AIMessage(content=WRONG_RETAIL),
+                     tool_call("search_filings", {"query": "retail"}, call_id="c2"), AIMessage(content=WRONG_RETAIL))
+    verifier = scripted(verdicts(False), verdicts(False))
+    out = run(make_researcher(model, SEGMENT_TOOLS, verifier=verifier), plan_state())
+    assert out["findings"][0]["facts"].startswith("- UNVERIFIED")
+    assert any("source check" in w and "marked UNVERIFIED" in w for w in out["warnings"])
+
+
+def test_verifier_is_not_called_when_the_code_checks_already_flag_the_notes():
+    model = scripted(tool_call("search_filings", {"query": "revenue"}), AIMessage(content=WRONG_TOTAL),
+                     tool_call("search_filings", {"query": "revenue total"}, call_id="c2"), AIMessage(content=RIGHT_TOTAL))
+    verifier = scripted(verdicts(True))  # one reply: only the corrected notes reach it
+    out = run(make_researcher(model, SEGMENT_TOOLS, verifier=verifier), plan_state())
+    assert out["findings"][0]["facts"] == RIGHT_TOTAL and len(verifier.seen) == 1
+    assert "9,80,136" in verifier.seen[0][1].content
+
+
+def test_repeated_search_results_are_kept_once():
+    from src.agents.nodes import collect_passages
+
+    passages: dict[str, str] = {}
+    result = segment_search("retail")
+    collect_passages(result, passages)
+    collect_passages(result, passages)
+    assert passages["RELIANCE.NS p130"].count("Segment Information") == 1
+
+
 def test_manual_unit_conversion_via_ratio_is_flagged():
     # Seen live: crore -> billion done as ratio(980136, 1000) = 980.136 (correct: 9,801.36).
     from src.agents.nodes import manual_conversion_warnings

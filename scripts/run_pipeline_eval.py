@@ -32,7 +32,7 @@ from rich.table import Table  # noqa: E402
 
 from config.llm import get_chat_model  # noqa: E402
 from config.settings import settings  # noqa: E402
-from src.agents.graph import AGENTS, DEFAULT_ROLES, build_graph  # noqa: E402
+from src.agents.graph import DEFAULT_ROLES, build_graph  # noqa: E402
 from src.evaluation.checks import check_result  # noqa: E402
 from src.mcp_client.client import MCPToolbox  # noqa: E402
 
@@ -53,7 +53,7 @@ async def main() -> int:
     if not questions:
         console.print(f"[red]No questions match --only {args.only!r}[/red]")
         return 1
-    roles = {a: "reasoning" for a in AGENTS} if args.all_reasoning else dict(DEFAULT_ROLES)
+    roles = {a: "reasoning" for a in DEFAULT_ROLES} if args.all_reasoning else dict(DEFAULT_ROLES)
 
     rows, started = [], time.monotonic()
     async with MCPToolbox() as toolbox:
@@ -77,6 +77,8 @@ async def main() -> int:
                          "tokens": sum((final.get("usage") or {}).values()), "seconds": round(time.monotonic() - t0),
                          "route": final.get("route"), "wrong_figure": result.wrong_figure, "critic": result.critic,
                          "critic_tokens": (final.get("usage") or {}).get("critic", 0),
+                         "verifier_tokens": (final.get("usage") or {}).get("verifier", 0),
+                         "warnings": final.get("warnings", []),
                          "report": final.get("report", "")[:1500]})
 
     # Save first: a display bug must never throw away a run that cost ~150k tokens.

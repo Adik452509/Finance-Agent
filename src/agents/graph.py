@@ -35,9 +35,10 @@ from src.agents.nodes import (
 from src.agents.state import ResearchState
 
 # agent -> config.llm role ("default" = gpt-oss-20b, "reasoning" = gpt-oss-120b on Groq)
-DEFAULT_ROLES = {"planner": "default", "researcher": "default", "analyst": "reasoning",
+# The verifier re-reads the cited filing pages to check the researcher's figures (column, year, segment).
+DEFAULT_ROLES = {"planner": "default", "researcher": "default", "verifier": "reasoning", "analyst": "reasoning",
                  "writer": "reasoning", "critic": "reasoning"}
-AGENTS = ("planner", "researcher", "analyst", "writer", "critic")
+AGENTS = ("planner", "researcher", "analyst", "writer", "critic")  # required; the verifier is optional
 MAX_REVISIONS = 2  # the critic checks at most MAX_REVISIONS + 1 drafts
 
 
@@ -67,20 +68,25 @@ def route_after_critic(state: ResearchState, max_revisions: int = MAX_REVISIONS)
 def default_llms(missing: set[str] | None = None) -> dict[str, BaseChatModel]:
     from config.llm import get_chat_model
 
-    return {agent: get_chat_model(DEFAULT_ROLES[agent]) for agent in (missing or AGENTS)}
+    return {agent: get_chat_model(DEFAULT_ROLES[agent]) for agent in (missing or DEFAULT_ROLES)}
 
 
 def build_graph(tools: list[BaseTool], llms: dict[str, BaseChatModel] | None = None,
                 companies: str | None = None, on_event: Events = None, max_revisions: int = MAX_REVISIONS):
-    """Wire the agents, the supervisor and the critic loop into a compiled LangGraph."""
+    """Wire the agents, the supervisor and the critic loop into a compiled LangGraph.
+
+    llms=None gives every role (verifier included) its default model. A partial dict gets the
+    missing required agents filled in; the source check then runs only if it has a "verifier".
+    """
+    missing = set(DEFAULT_ROLES) if llms is None else set(AGENTS) - set(llms)
     llms = dict(llms or {})
-    missing = set(AGENTS) - set(llms)
     if missing:
         llms.update(default_llms(missing))
 
     g = StateGraph(ResearchState)
     g.add_node("planner", make_planner(llms["planner"], companies))
-    g.add_node("researcher", make_researcher(llms["researcher"], tools, on_event=on_event))
+    g.add_node("researcher", make_researcher(llms["researcher"], tools, on_event=on_event,
+                                             verifier=llms.get("verifier")))
     g.add_node("supervisor", make_supervisor(has_calculator=bool(only(tools, CALC_TOOLS))))
     g.add_node("analyst", make_analyst(llms["analyst"], tools, on_event=on_event))
     g.add_node("writer", make_writer(llms["writer"]))

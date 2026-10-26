@@ -28,7 +28,7 @@ from rich.table import Table  # noqa: E402
 from config.llm import get_chat_model  # noqa: E402
 from config.settings import settings  # noqa: E402
 from run_single_agent import explain_error  # noqa: E402  (scripts/ is on sys.path when run directly)
-from src.agents.graph import AGENTS, DEFAULT_ROLES, build_graph  # noqa: E402
+from src.agents.graph import DEFAULT_ROLES, build_graph  # noqa: E402
 from src.agents.state import add_usage  # noqa: E402
 from src.mcp_client.client import MCPToolbox  # noqa: E402
 
@@ -89,7 +89,7 @@ def show_usage(usage: dict, roles: dict, seconds: float) -> None:
     table = Table(title=f"Tokens per agent ({seconds:.0f}s)")
     for col in ("agent", "model", "tokens"):
         table.add_column(col)
-    for agent in AGENTS:
+    for agent in DEFAULT_ROLES:
         if agent in usage:
             model = settings.reasoning_model if roles[agent] == "reasoning" else settings.default_model
             table.add_row(agent, model, f"{usage[agent]:,}")
@@ -117,7 +117,7 @@ async def main() -> int:
     parser.add_argument("--all-reasoning", action="store_true", help="put every agent on the stronger model")
     args = parser.parse_args()
 
-    roles = {a: "reasoning" for a in AGENTS} if args.all_reasoning else dict(DEFAULT_ROLES)
+    roles = {a: "reasoning" for a in DEFAULT_ROLES} if args.all_reasoning else dict(DEFAULT_ROLES)
     async with MCPToolbox() as toolbox:
         console.print(f"[dim]{toolbox.summary()}[/dim]")
         llms = {agent: get_chat_model(role) for agent, role in roles.items()}

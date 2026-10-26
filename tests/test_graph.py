@@ -161,5 +161,15 @@ def test_supervisor_routing_rules():
 
 
 def test_roles_spread_across_two_models():
-    assert DEFAULT_ROLES == {"planner": "default", "researcher": "default", "analyst": "reasoning",
-                             "writer": "reasoning", "critic": "reasoning"}
+    assert DEFAULT_ROLES == {"planner": "default", "researcher": "default", "verifier": "reasoning",
+                             "analyst": "reasoning", "writer": "reasoning", "critic": "reasoning"}
+
+
+def test_verifier_runs_inside_the_researcher_and_its_tokens_are_counted():
+    models = calc_pipeline_models()
+    models["verifier"] = scripted(AIMessage(content='{"results": [{"fact": 1, "supported": true, "reason": "ok"}, '
+                                                    '{"fact": 2, "supported": true, "reason": "ok"}]}',
+                                            usage_metadata=usage(2000)))
+    final = run(build_graph(ALL_TOOLS, models, companies=""))
+    assert final["usage"]["verifier"] == 2000 and final["warnings"] == []
+    assert "RELIANCE.NS p100" in models["verifier"].seen[0][1].content  # it got the cited page

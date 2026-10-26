@@ -109,6 +109,14 @@ where <source> is the passage's source_id in brackets for filings, e.g. [RELIANC
 If something could not be found, write: - NOT FOUND: <what>
 """
 
+SOURCE_CHECK_PROMPT = """You verify a researcher's fact notes against the source page text they cite.
+For EACH numbered fact, decide if the page supports it exactly: the same figure, for the same
+metric, the same PERIOD (year column) and the same SCOPE (consolidated / standalone / which segment).
+Financial tables list several columns: work out which column a number is in from the table header.
+A figure that exists on the page but belongs to another column, year, segment or row is NOT supported.
+
+Reply with ONLY: {"results": [{"fact": <number>, "supported": true or false, "reason": "short reason"}]}"""
+
 ANALYST_PROMPT = """You are the ANALYST of a financial research team. You receive fact notes and a calculation to do.
 
 Rules:
