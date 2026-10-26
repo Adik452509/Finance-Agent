@@ -50,6 +50,36 @@ def test_tool_result_is_fed_back_to_the_model():
     assert isinstance(second_call[-1], ToolMessage) and "7.18" in second_call[-1].content
 
 
+def test_default_args_fill_in_only_what_the_model_left_out():
+    defaults = {"percent_change": {"old_value": 100}}
+    filled = loop(scripted(tool_call("percent_change", {"new_value": 110}), AIMessage(content="ok")), default_args=defaults)
+    assert filled.calls[0]["args"] == {"new_value": 110, "old_value": 100} and filled.calls[0]["ok"] is True
+    kept = loop(scripted(tool_call("percent_change", {"old_value": 200, "new_value": 220}), AIMessage(content="ok")),
+                default_args=defaults)
+    assert kept.calls[0]["args"]["old_value"] == 200  # an explicit value is never overwritten
+
+
+def test_api_rejected_tool_call_is_retried_once_with_the_tool_list():
+    from tests.test_nodes import raising
+
+    rejected = Exception("Error code: 400 - Tool call validation failed: attempted to call tool 'search_filings' "
+                         "which was not in request.tools")
+    model = raising(rejected, AIMessage(content="- NOT FOUND: revenue"))
+    result = loop(model)
+    assert result.text == "- NOT FOUND: revenue"
+    assert "you can only use these tools: percent_change" in model.seen[1][-1].content
+
+
+def test_api_rejected_tool_call_twice_raises():
+    import pytest
+
+    from tests.test_nodes import raising
+
+    rejected = Exception("Tool call validation failed")
+    with pytest.raises(Exception, match="validation failed"):
+        loop(raising(rejected, rejected))
+
+
 def test_unknown_tool_becomes_an_error_result_not_a_crash():
     result = loop(scripted(tool_call("telepathy", {}), AIMessage(content="Could not do it.")))
     assert result.calls[0]["ok"] is False

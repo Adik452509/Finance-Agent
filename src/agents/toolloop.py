@@ -41,6 +41,7 @@ class LoopResult:
     tokens: int = 0
     rounds: int = 0       # rounds in which tools were called
     hit_cap: bool = False
+    retried_tool_validation: bool = False
 
 
 def parse_tool_result(content: Any) -> tuple[bool | None, str | None]:
@@ -100,6 +101,7 @@ async def run_tool_loop(
     max_tool_chars: int = MAX_TOOL_CHARS,
     compact_older_results: int | None = None,
     on_event: Callable[[str, dict], None] | None = None,
+    default_args: dict[str, dict] | None = None,
 ) -> LoopResult:
     """Run the think -> tool -> think loop; return the final text, calls and token count.
 
@@ -107,6 +109,9 @@ async def run_tool_loop(
     characters before each new LLM call (the newest round stays complete). Seen live:
     a researcher searching 3 times in one step grew the conversation past Groq's
     8,000-token request limit (HTTP 413).
+
+    default_args: per-tool arguments filled in when the model leaves them out, e.g.
+    {"search_filings": {"ticker": "MSFT"}} so a search can't silently return other companies.
     """
     emit = on_event or (lambda kind, payload: None)
     by_name = {t.name: t for t in tools}
@@ -130,7 +135,17 @@ async def run_tool_loop(
             result.text = _message_text(final.content).strip()
             return result
 
-        reply = await bound.ainvoke(msgs)
+        try:
+            reply = await bound.ainvoke(msgs)
+        except Exception as e:
+            # Seen live (Groq): the model called a tool that isn't bound, and the API rejected the
+            # whole reply with HTTP 400 "tool call validation failed". Say what exists and retry once.
+            if "tool call validation failed" not in str(e).lower() or result.retried_tool_validation:
+                raise
+            result.retried_tool_validation = True
+            msgs.append(HumanMessage(f"That tool call was rejected: you can only use these tools: "
+                                     f"{', '.join(by_name) or 'none'}. If they can't provide something, say NOT FOUND."))
+            continue
         result.tokens += count_tokens(reply)
         msgs.append(reply)
         if not getattr(reply, "tool_calls", None):
@@ -142,6 +157,8 @@ async def run_tool_loop(
         latest_round = []
         for call in reply.tool_calls:
             name, args = call["name"], call.get("args", {}) or {}
+            defaults = (default_args or {}).get(name, {})
+            args = {**args, **{k: v for k, v in defaults.items() if not args.get(k)}}
             emit("call", {"agent": agent, "name": name, "args": args})
             started = time.monotonic()
             content = await _run_tool(by_name.get(name), name, args, list(by_name))
