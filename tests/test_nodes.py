@@ -424,6 +424,27 @@ def test_filings_step_for_an_unindexed_company_is_rerouted():
     assert any("no annual report indexed for MSFT" in w for w in out["warnings"])
 
 
+def test_unindexed_tokyo_company_goes_to_edinet():
+    from src.agents.nodes import STEP_TOOLS, reroute_unindexed
+
+    plan = {"steps": [{"kind": "filings", "ticker": "6758.T", "goal": "Sony revenue"}]}
+    step = reroute_unindexed(plan, {"7203.T"})[0]["steps"][0]
+    assert step["kind"] == "edinet" and "EDINET" in step["goal"]
+    assert "get_annual_financials" in STEP_TOOLS["edinet"]  # Yahoo fallback if EDINET has no key
+
+
+def test_steps_for_a_switched_off_source_use_market_data():
+    # EDINET without a key is disabled: a Japanese company's step must still get real tools (Yahoo).
+    from src.agents.nodes import unavailable_kinds
+
+    assert unavailable_kinds(TOOLS) == {"sec", "edinet"}  # TOOLS has no SEC / EDINET tools
+    plan = '{"steps": [{"kind": "edinet", "ticker": "6758.T", "goal": "Sony revenue FY2025"}], "needs_calculation": false}'
+    out = run(make_planner(scripted(AIMessage(content=plan)), companies="", known_tickers=set(),
+                           unavailable={"edinet"}), {"question": "Sony revenue?"})
+    assert out["plan"]["steps"][0]["kind"] == "market"
+    assert any("edinet data is not available" in w for w in out["warnings"])
+
+
 def test_planner_can_choose_the_sec_kind():
     from src.agents.state import parse_plan
 

@@ -30,7 +30,7 @@ from langgraph.graph import END, START, StateGraph
 
 from src.agents.critic import make_critic
 from src.agents.nodes import (
-    CALC_TOOLS, Events, finalize, make_analyst, make_planner, make_researcher, make_writer, only,
+    CALC_TOOLS, Events, finalize, make_analyst, make_planner, make_researcher, make_writer, only, unavailable_kinds,
 )
 from src.agents.state import ResearchState
 
@@ -84,7 +84,7 @@ def build_graph(tools: list[BaseTool], llms: dict[str, BaseChatModel] | None = N
         llms.update(default_llms(missing))
 
     g = StateGraph(ResearchState)
-    g.add_node("planner", make_planner(llms["planner"], companies))
+    g.add_node("planner", make_planner(llms["planner"], companies, unavailable=unavailable_kinds(tools)))
     g.add_node("researcher", make_researcher(llms["researcher"], tools, on_event=on_event,
                                              verifier=llms.get("verifier")))
     g.add_node("supervisor", make_supervisor(has_calculator=bool(only(tools, CALC_TOOLS))))

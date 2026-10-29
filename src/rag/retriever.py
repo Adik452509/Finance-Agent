@@ -44,7 +44,8 @@ class RetrievedChunk:
     def citation(self) -> str:
         """Human-readable source, e.g. 'Apple Inc. 10-K (FY ended 2025-09-27), PDF p. 32 (printed p. 29)'."""
         m = self.metadata
-        where = f"PDF p. {m.get('page')}"
+        html = str(m.get("file", "")).lower().endswith((".htm", ".html"))  # SEC filings: pages, not PDF pages
+        where = f"{'' if html else 'PDF '}p. {m.get('page')}"
         if m.get("page_label"):
             where += f" (printed p. {m['page_label']})"
         return f"{m.get('company')} {m.get('doc_type')} (FY ended {m.get('fiscal_year_end')}), {where}"

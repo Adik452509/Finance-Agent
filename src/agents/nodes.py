@@ -31,13 +31,16 @@ from src.observability.guardrails import with_disclaimer
 from src.rag.qa import _message_text, normalize_answer
 
 RESEARCH_TOOLS = {"get_quote", "get_quarterly_financials", "get_annual_financials", "list_supported_markets",
-                  "search_filings", "list_filings", "get_sec_financials", "get_sec_filings", "search_news"}
+                  "search_filings", "list_filings", "get_sec_financials", "get_sec_filings",
+                  "get_edinet_financials", "get_edinet_filings", "search_news"}
 CALC_TOOLS = {"percent_change", "cagr", "ratio", "share_of_total", "convert_units", "series_change"}
 # Each plan step gets only its source's tools (an "any" step gets all of RESEARCH_TOOLS).
 # Seen live: a market step for Microsoft still called search_filings, which could only fail.
 STEP_TOOLS = {"market": {"get_quote", "get_quarterly_financials", "get_annual_financials", "list_supported_markets"},
               "filings": {"search_filings", "list_filings"},
               "sec": {"get_sec_financials", "get_sec_filings"},
+              # Yahoo's annual figures as the fallback when EDINET has no key or no report yet.
+              "edinet": {"get_edinet_financials", "get_edinet_filings", "get_annual_financials"},
               "news": {"search_news"}}
 
 Events = Callable[[str, dict], None] | None
@@ -60,6 +63,25 @@ def indexed_tickers() -> set[str]:
     return {d.ticker for d in load_registry()}
 
 
+# A step kind whose server is switched off (e.g. EDINET without a key) runs on market data instead.
+KIND_FALLBACK = {"sec": "market", "edinet": "market"}
+KIND_MAIN_TOOL = {"sec": "get_sec_financials", "edinet": "get_edinet_financials"}
+
+
+def unavailable_kinds(tools: list[BaseTool]) -> set[str]:
+    names = {t.name for t in tools}
+    return {kind for kind, tool in KIND_MAIN_TOOL.items() if tool not in names}
+
+
+def fallback_unavailable(plan: dict, unavailable: set[str]) -> tuple[dict, list[str]]:
+    notes = []
+    for step in plan["steps"]:
+        if step["kind"] in unavailable:
+            notes.append(f"planner: {step['kind']} data is not available; step {step['id']} uses market data")
+            step["kind"] = KIND_FALLBACK[step["kind"]]
+    return plan, notes
+
+
 def reroute_unindexed(plan: dict, known: set[str]) -> tuple[dict, list[str]]:
     """Send filings steps for companies with no indexed annual report to a source that has them.
 
@@ -76,6 +98,10 @@ def reroute_unindexed(plan: dict, known: set[str]) -> tuple[dict, list[str]]:
                 step["kind"] = "sec"
                 step["goal"] += f" (no annual report for {ticker} is indexed: use its official SEC figures)"
                 notes.append(f"planner: no annual report indexed for {ticker}; filings step switched to SEC data")
+            elif ticker.upper().endswith(".T"):
+                step["kind"] = "edinet"
+                step["goal"] += f" (no annual report for {ticker} is indexed: use its official EDINET figures)"
+                notes.append(f"planner: no annual report indexed for {ticker}; filings step switched to EDINET data")
             else:
                 step["kind"] = "market"
                 step["goal"] += (f" (no annual report for {ticker} is indexed: use market data - annual and quarterly "
@@ -286,7 +312,8 @@ def only(tools: list[BaseTool], allowed: set[str]) -> list[BaseTool]:
 # --- planner -------------------------------------------------------------------------------
 
 
-def make_planner(llm: BaseChatModel, companies: str | None = None, known_tickers: set[str] | None = None):
+def make_planner(llm: BaseChatModel, companies: str | None = None, known_tickers: set[str] | None = None,
+                 unavailable: set[str] | None = None):
     system = (PLANNER_PROMPT.replace("<<COMPANIES>>", companies if companies is not None else companies_context())
               .replace("<<MAX_STEPS>>", str(MAX_STEPS)))
     known = known_tickers if known_tickers is not None else indexed_tickers()
@@ -315,7 +342,8 @@ def make_planner(llm: BaseChatModel, companies: str | None = None, known_tickers
                     plan = fallback_plan(question)
                     warnings.append(f"planner failed twice ({e}); using a one-step fallback plan")
         plan_dict, notes = reroute_unindexed(plan.model_dump(), known)
-        return {"plan": plan_dict, "warnings": warnings + notes, "usage": {"planner": tokens}}
+        plan_dict, more = fallback_unavailable(plan_dict, unavailable or set())
+        return {"plan": plan_dict, "warnings": warnings + notes + more, "usage": {"planner": tokens}}
 
     return planner
 

@@ -130,7 +130,16 @@ async def run_tool_loop(
             # Cap reached: one last call with no tools bound, so it cannot keep looping.
             result.hit_cap = True
             msgs.append(HumanMessage(STOP_TOOLS))
-            final = await llm.ainvoke(msgs)
+            try:
+                final = await llm.ainvoke(msgs)
+            except Exception as e:
+                # Seen live (Groq): with tools switched off the model still tried one, and the API
+                # rejected the reply ("Tool choice is none, but model called a tool"). Insist once.
+                if "tool choice is none" not in str(e).lower() and "tool_use_failed" not in str(e):
+                    raise
+                msgs.append(HumanMessage("Tools are switched off: a tool call will fail. Write your final "
+                                         "answer as plain text now."))
+                final = await llm.ainvoke(msgs)
             result.tokens += count_tokens(final)
             result.text = _message_text(final.content).strip()
             return result

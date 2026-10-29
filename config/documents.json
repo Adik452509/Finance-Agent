@@ -28,5 +28,19 @@
     "fiscal_year_end": "2026-03-31",
     "currency": "JPY",
     "reporting_unit": "JPY millions"
+  },
+  {
+    "file": "MSFT-10-K-2026-06-30.htm",
+    "company": "Microsoft Corp",
+    "ticker": "MSFT",
+    "market": "USA",
+    "doc_type": "10-K",
+    "fiscal_year_end": "2026-06-30",
+    "currency": "USD",
+    "reporting_unit": "USD millions",
+    "source": "sec",
+    "source_url": "https://www.sec.gov/Archives/edgar/data/789019/000119312526323660/msft-20260630.htm",
+    "filed": "2026-07-29",
+    "pages": "1-32,34-99,101"
   }
 ]

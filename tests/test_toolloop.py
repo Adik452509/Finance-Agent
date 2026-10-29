@@ -80,6 +80,17 @@ def test_api_rejected_tool_call_twice_raises():
         loop(raising(rejected, rejected))
 
 
+def test_tool_call_after_the_cap_is_retried_as_plain_text():
+    from tests.test_nodes import raising
+
+    rejected = Exception("Error code: 400 - Tool choice is none, but model called a tool (tool_use_failed)")
+    model = raising(tool_call("percent_change", {"old_value": 1, "new_value": 2}), rejected,
+                    AIMessage(content="Final notes."))
+    result = loop(model, max_rounds=1)
+    assert result.hit_cap and result.text == "Final notes."
+    assert "Tools are switched off" in model.seen[-1][-1].content
+
+
 def test_unknown_tool_becomes_an_error_result_not_a_crash():
     result = loop(scripted(tool_call("telepathy", {}), AIMessage(content="Could not do it.")))
     assert result.calls[0]["ok"] is False

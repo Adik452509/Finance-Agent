@@ -14,6 +14,7 @@ import logging
 import re
 from collections import Counter
 from dataclasses import asdict, dataclass
+from html.parser import HTMLParser
 from pathlib import Path
 
 from pypdf import PdfReader
@@ -30,6 +31,9 @@ REQUIRED_FIELDS = (
     "file", "company", "ticker", "market", "doc_type",
     "fiscal_year_end", "currency", "reporting_unit",
 )
+# Written by scripts/add_company.py: where the filing came from, and which pages to index.
+OPTIONAL_FIELDS = ("source", "source_url", "filed", "pages")
+HTML_SUFFIXES = (".htm", ".html")
 
 # Pages with less text than this after cleaning (chart-only pages, blank
 # separators) are skipped: they cost embedding quota and never answer anything.
@@ -56,9 +60,16 @@ class DocumentMeta:
     fiscal_year_end: str
     currency: str
     reporting_unit: str
+    source: str = ""        # "sec", "edinet", "url" - or "" for a PDF added by hand
+    source_url: str = ""
+    filed: str = ""         # filing date, used to spot newer reports
+    pages: str = ""         # "1-40,55-90": index only these pages ("" = all)
 
     def path(self, raw_dir: Path | None = None) -> Path:
         return (raw_dir or settings.raw_dir) / self.file
+
+    def selected_pages(self) -> set[int] | None:
+        return parse_page_ranges(self.pages) if self.pages else None
 
 
 @dataclass(frozen=True)
@@ -72,7 +83,8 @@ class Page:
 
     def metadata(self) -> dict[str, str | int]:
         """Flat metadata for the vector store (Chroma rejects None values)."""
-        data: dict[str, str | int] = {**asdict(self.meta), "page": self.page}
+        meta = {k: v for k, v in asdict(self.meta).items() if k in REQUIRED_FIELDS or (v and k != "pages")}
+        data: dict[str, str | int] = {**meta, "page": self.page}
         if self.page_label:
             data["page_label"] = self.page_label
         return data
@@ -102,8 +114,40 @@ def load_registry(path: Path | None = None) -> list[DocumentMeta]:
             raise ValueError(f"{path.name} lists {entry['file']!r} more than once")
         seen.add(entry["file"])
 
-        docs.append(DocumentMeta(**{f: str(entry[f]) for f in REQUIRED_FIELDS}))
+        optional = {f: str(entry[f]) for f in OPTIONAL_FIELDS if entry.get(f)}
+        if optional.get("pages"):
+            parse_page_ranges(optional["pages"])  # fail here, with the entry number, not mid-ingest
+        docs.append(DocumentMeta(**{f: str(entry[f]) for f in REQUIRED_FIELDS}, **optional))
     return docs
+
+
+def parse_page_ranges(spec: str) -> set[int]:
+    """'1-3,7' -> {1, 2, 3, 7}."""
+    pages: set[int] = set()
+    for part in spec.replace(" ", "").split(","):
+        if not part:
+            continue
+        match = re.fullmatch(r"(\d+)(?:-(\d+))?", part)
+        if not match:
+            raise ValueError(f"bad page range {part!r} in {spec!r}")
+        start, end = int(match.group(1)), int(match.group(2) or match.group(1))
+        if end < start:
+            raise ValueError(f"bad page range {part!r} in {spec!r}")
+        pages.update(range(start, end + 1))
+    return pages
+
+
+def format_page_ranges(pages: list[int]) -> str:
+    """[1, 2, 3, 7] -> '1-3,7' (the compact form stored in documents.json)."""
+    parts, ordered = [], sorted(set(pages))
+    i = 0
+    while i < len(ordered):
+        j = i
+        while j + 1 < len(ordered) and ordered[j + 1] == ordered[j] + 1:
+            j += 1
+        parts.append(str(ordered[i]) if i == j else f"{ordered[i]}-{ordered[j]}")
+        i = j + 1
+    return ",".join(parts)
 
 
 def check_raw_dir(docs: list[DocumentMeta], raw_dir: Path | None = None) -> None:
@@ -114,7 +158,7 @@ def check_raw_dir(docs: list[DocumentMeta], raw_dir: Path | None = None) -> None
         raise FileNotFoundError(f"Registered but not found in {raw_dir}: {', '.join(missing)}")
 
     registered = {d.file for d in docs}
-    for pdf in sorted(raw_dir.glob("*.pdf")):
+    for pdf in sorted(p for p in raw_dir.iterdir() if p.suffix.lower() in (".pdf", *HTML_SUFFIXES)):
         if pdf.name not in registered:
             logger.warning("Skipping %s: not listed in %s", pdf.name, settings.documents_registry.name)
 
@@ -193,14 +237,95 @@ def strip_edges(lines: list[str], boilerplate: set[str]) -> tuple[list[str], str
 # --- Loading -----------------------------------------------------------------
 
 
+class _HTMLText(HTMLParser):
+    """Visible text of a filing's HTML, split into pages at its page breaks.
+
+    SEC filings are HTML; their print layout marks each page end with a CSS page break
+    (`<hr style="page-break-after:always">`), and the footer above it carries the
+    printed page number - so pages, and citations, match the printed document.
+    """
+
+    BLOCKS = {"p", "div", "br", "tr", "li", "h1", "h2", "h3", "h4", "h5", "h6", "table", "section"}
+    HIDDEN = {"script", "style", "head", "title", "ix:header"}
+    VOID = {"br", "hr", "img", "meta", "link", "input"}
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.pages: list[list[str]] = [[]]
+        self._stack: list[tuple[str, bool, bool]] = []  # (tag, hidden, page break after)
+        self._hidden = 0
+        self._in_cell = 0  # inside <td>/<th>: <div>/<p> wrappers must not break the row's line
+
+    def _break(self) -> None:
+        if any(s.strip() for s in self.pages[-1]):
+            self.pages.append([])
+
+    def handle_starttag(self, tag, attrs):
+        style = (dict(attrs).get("style") or "").replace(" ", "").lower()
+        hidden = tag in self.HIDDEN or "display:none" in style
+        after = "page-break-after:always" in style or "break-after:page" in style
+        if "page-break-before:always" in style or "break-before:page" in style:
+            self._break()
+        if tag in ("td", "th"):
+            self.pages[-1].append(" ")
+            self._in_cell += 1
+        elif tag in self.BLOCKS and (not self._in_cell or tag == "tr"):
+            self.pages[-1].append("\n")
+        if tag in self.VOID:
+            if after:
+                self._break()
+            return
+        self._stack.append((tag, hidden, after))
+        self._hidden += hidden
+
+    def handle_endtag(self, tag):
+        while self._stack:  # tolerate unclosed tags: pop until the matching one
+            open_tag, hidden, after = self._stack.pop()
+            self._hidden -= hidden
+            if open_tag in ("td", "th"):
+                self._in_cell = max(0, self._in_cell - 1)
+            if after:
+                self._break()
+            if open_tag == tag:
+                break
+        if tag in self.BLOCKS and not self._in_cell:
+            self.pages[-1].append("\n")
+
+    def handle_data(self, data):
+        if not self._hidden:
+            # As in a browser, line breaks in the HTML source are just spaces; lines come from tags.
+            self.pages[-1].append(re.sub(r"\s+", " ", data))
+
+    def text_pages(self) -> list[str]:
+        pages = []
+        for parts in self.pages:
+            text = "".join(parts)
+            text = re.sub(r"\(\s+(?=\d)|(?<=\d)\s+\)", lambda m: m.group().strip(), text)  # "(4,901 )" -> "(4,901)"
+            text = re.sub(r"\$\s+(?=[\d(])", "$", text)                                    # "$ 64,696" -> "$64,696"
+            pages.append(text)
+        while pages and not pages[-1].strip():  # whatever follows the last page break
+            pages.pop()
+        return pages
+
+
+def html_pages(path: Path) -> list[str]:
+    parser = _HTMLText()
+    parser.feed(path.read_text(encoding="utf-8", errors="replace"))
+    parser.close()
+    return parser.text_pages()
+
+
 def load_document(meta: DocumentMeta, raw_dir: Path | None = None) -> list[Page]:
-    """Extract, clean and return the usable pages of one registered PDF."""
+    """Extract, clean and return the usable pages of one registered PDF or HTML filing."""
     path = meta.path(raw_dir)
-    try:
-        reader = PdfReader(path)
-        raw_pages = [page.extract_text() or "" for page in reader.pages]
-    except PdfReadError as e:
-        raise RuntimeError(f"Could not read {path.name}: {e}") from e
+    if path.suffix.lower() in HTML_SUFFIXES:
+        raw_pages = html_pages(path)
+    else:
+        try:
+            reader = PdfReader(path)
+            raw_pages = [page.extract_text() or "" for page in reader.pages]
+        except PdfReadError as e:
+            raise RuntimeError(f"Could not read {path.name}: {e}") from e
 
     pages_lines = [
         [ln for ln in normalize_text(t, meta.currency).splitlines() if ln]
@@ -208,9 +333,12 @@ def load_document(meta: DocumentMeta, raw_dir: Path | None = None) -> list[Page]
     ]
     boilerplate = find_boilerplate(pages_lines, meta.company)
 
+    selected = meta.selected_pages()
     pages: list[Page] = []
     skipped = 0
     for number, lines in enumerate(pages_lines, start=1):
+        if selected is not None and number not in selected:
+            continue
         kept, label = strip_edges(lines, boilerplate)
         text = "\n".join(kept)
         if len(text) < MIN_PAGE_CHARS:

@@ -234,7 +234,7 @@ def test_annual_rejects_out_of_range_years(bad):
 def test_list_supported_markets_includes_suffixes_and_indexed_companies():
     r = ms.list_supported_markets()
     assert {m["suffix"] for m in r["markets"]} >= {".NS", ".T", ".HK"}
-    assert {c["ticker"] for c in r["companies_with_filings"]} == {"AAPL", "RELIANCE.NS", "7203.T"}
+    assert {c["ticker"] for c in r["companies_with_filings"]} >= {"AAPL", "RELIANCE.NS", "7203.T"}  # + added ones
 
 
 def test_tools_are_discoverable_with_descriptions_and_schemas():

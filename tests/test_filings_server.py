@@ -77,7 +77,7 @@ def test_daily_quota_error_is_explained(fake_retriever, monkeypatch):
 def test_list_filings_shows_indexing_status():
     r = fs.list_filings()
     by_ticker = {f["ticker"]: f for f in r["filings"]}
-    assert set(by_ticker) == {"AAPL", "RELIANCE.NS", "7203.T"}  # from config/documents.json
+    assert set(by_ticker) >= {"AAPL", "RELIANCE.NS", "7203.T"}  # from config/documents.json (add_company.py adds more)
     assert by_ticker["AAPL"]["searchable"] and by_ticker["AAPL"]["indexed_chunks"] == 2
     assert by_ticker["RELIANCE.NS"]["reporting_unit"] == "INR crore"
 
