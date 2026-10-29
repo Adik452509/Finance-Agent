@@ -90,6 +90,8 @@ def test_market_and_news_citations_count():
     findings = [{"step_id": 1, "kind": "market", "goal": "price",
                  "facts": "- Share price: 3,105 JPY (Yahoo Finance, as of 2026-10-25)"}]
     assert check("Toyota trades at ¥3,105 (Yahoo Finance, as of 2026-10-25).", findings=findings, analysis="") == []
+    # Seen live: "[Yahoo Finance (via yfinance), as of ...]" in square brackets is still a citation.
+    assert check("Toyota trades at ¥3,105 [Yahoo Finance, as of 2026-10-25].", findings=findings, analysis="") == []
     news = [{"step_id": 1, "kind": "news", "goal": "news",
              "facts": "- Toyota sold 201,306 vehicles (autoevolution.com, 23 Oct 2026)"}]
     assert check("Toyota sold 201,306 vehicles (autoevolution.com, 23 Oct 2026).", findings=news, analysis="") == []

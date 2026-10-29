@@ -17,6 +17,7 @@ SERVERS = [market_server, filings_server, calculator_server, news_server]
 BAD_CALLS = [
     (market_server.get_quote, {"ticker": "!!"}),
     (market_server.get_quarterly_financials, {"ticker": "AAPL", "quarters": 0}),
+    (market_server.get_annual_financials, {"ticker": "AAPL", "years": 0}),
     (filings_server.search_filings, {"query": "   "}),
     (calculator_server.percent_change, {"old_value": 0, "new_value": 1}),
     (calculator_server.cagr, {"start_value": -1, "end_value": 1, "years": 1}),

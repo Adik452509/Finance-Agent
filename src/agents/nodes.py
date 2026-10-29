@@ -14,6 +14,7 @@ per request, and a single agent with all 12 tools went over it in Phase 3.
 
 import json
 import re
+from datetime import date
 from typing import Callable
 
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -29,12 +30,12 @@ from src.agents.toolloop import count_tokens, run_tool_loop
 from src.observability.guardrails import with_disclaimer
 from src.rag.qa import _message_text, normalize_answer
 
-RESEARCH_TOOLS = {"get_quote", "get_quarterly_financials", "list_supported_markets",
+RESEARCH_TOOLS = {"get_quote", "get_quarterly_financials", "get_annual_financials", "list_supported_markets",
                   "search_filings", "list_filings", "search_news"}
 CALC_TOOLS = {"percent_change", "cagr", "ratio", "share_of_total", "convert_units", "series_change"}
 # Each plan step gets only its source's tools (an "any" step gets all of RESEARCH_TOOLS).
 # Seen live: a market step for Microsoft still called search_filings, which could only fail.
-STEP_TOOLS = {"market": {"get_quote", "get_quarterly_financials", "list_supported_markets"},
+STEP_TOOLS = {"market": {"get_quote", "get_quarterly_financials", "get_annual_financials", "list_supported_markets"},
               "filings": {"search_filings", "list_filings"},
               "news": {"search_news"}}
 
@@ -70,8 +71,8 @@ def reroute_unindexed(plan: dict, known: set[str]) -> tuple[dict, list[str]]:
         ticker = step.get("ticker")
         if step["kind"] == "filings" and ticker and _base_ticker(ticker) not in known_bases:
             step["kind"] = "market"
-            step["goal"] += (f" (no annual report for {ticker} is indexed: use market data - recent quarterly "
-                             f"figures - and say that annual-report figures are not in the library)")
+            step["goal"] += (f" (no annual report for {ticker} is indexed: use market data - annual and quarterly "
+                             f"statement figures from Yahoo Finance)")
             notes.append(f"planner: no annual report indexed for {ticker}; filings step switched to market data")
     return plan, notes
 
@@ -285,7 +286,8 @@ def make_planner(llm: BaseChatModel, companies: str | None = None, known_tickers
 
     async def planner(state: ResearchState) -> dict:
         question = state["question"]
-        messages = [SystemMessage(system), HumanMessage(question)]
+        # The date lets "latest year" questions pick the right year (seen live: the model assumed FY2025).
+        messages = [SystemMessage(system), HumanMessage(f"Today's date: {date.today().isoformat()}\n\n{question}")]
         tokens, warnings = 0, []
         for attempt in (1, 2):
             try:
@@ -316,7 +318,7 @@ def make_planner(llm: BaseChatModel, companies: str | None = None, known_tickers
 
 def _step_brief(question: str, step: dict) -> str:
     ticker = f" Ticker: {step['ticker']}." if step.get("ticker") else ""
-    return (f"Overall question (for context): {question}\n\n"
+    return (f"Today's date: {date.today().isoformat()}\nOverall question (for context): {question}\n\n"
             f"Your step ({step['kind']}):{ticker} {step['goal']}")
 
 

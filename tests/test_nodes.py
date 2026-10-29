@@ -70,6 +70,9 @@ def test_planner_prompt_has_no_unfilled_placeholders():
     run(make_planner(model, companies="- Apple Inc. (AAPL)"), {"question": "q?"})
     system = model.seen[0][0].content
     assert "<<" not in system and "- Apple Inc. (AAPL)" in system and "1 to 5 steps" in system
+    from datetime import date
+
+    assert f"Today's date: {date.today().isoformat()}" in model.seen[0][1].content  # for "latest year" questions
 
 
 def test_planner_retries_once_with_the_reason():
@@ -414,7 +417,7 @@ def test_filings_step_for_an_unindexed_company_becomes_a_market_step():
     out = run(make_planner(scripted(AIMessage(content=plan)), companies="", known_tickers={"RELIANCE.NS", "AAPL"}),
               {"question": "Compare Microsoft and Reliance revenue"})
     msft, ril = out["plan"]["steps"]
-    assert msft["kind"] == "market" and "not in the library" in msft["goal"]
+    assert msft["kind"] == "market" and "annual and quarterly statement figures" in msft["goal"]
     assert ril["kind"] == "filings" and ril["goal"] == "Revenue 2024-25"
     assert any("no annual report indexed for MSFT" in w for w in out["warnings"])
 

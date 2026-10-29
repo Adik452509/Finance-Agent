@@ -1,4 +1,4 @@
-"""Market Data MCP server: live prices and quarterly financials via yfinance.
+"""Market Data MCP server: live prices, quarterly and annual financials via yfinance.
 
 Runs as its own process; agents reach it only through MCP. Start it standalone with:
     python -m src.mcp_servers.market_server
@@ -29,7 +29,7 @@ logging.basicConfig(stream=sys.stderr, level=logging.WARNING, format="%(levelnam
 logger = logging.getLogger("market_server")
 warnings.filterwarnings("ignore", message=".*Timestamp.utcnow.*")
 
-SOURCE = "Yahoo Finance (via yfinance)"
+SOURCE = "Yahoo Finance"  # was "Yahoo Finance (via yfinance)": the nested brackets came back as "[Yahoo ...]"
 CACHE_TTL_SECONDS = 300  # agents often ask for the same ticker several times in one run
 MAX_QUARTERS = 8
 
@@ -42,6 +42,31 @@ NET_INCOME_ROWS = (
     "Net Income Common Stockholders",
     "Net Income From Continuing Operation Net Minority Interest",
 )
+
+MAX_YEARS = 5
+
+# Annual statement items: output field -> Yahoo row names to try, in order.
+# Kept to the headline items so the result stays small (the researcher's requests are capped at 8k tokens).
+ANNUAL_ITEMS = {
+    "income_stmt": {
+        "revenue": REVENUE_ROWS,
+        "gross_profit": ("Gross Profit",),
+        "operating_income": ("Operating Income", "Total Operating Income As Reported"),
+        "net_income": NET_INCOME_ROWS,
+    },
+    "balance_sheet": {
+        "total_assets": ("Total Assets",),
+        "total_liabilities": ("Total Liabilities Net Minority Interest",),
+        "shareholders_equity": ("Stockholders Equity", "Common Stock Equity"),
+        "cash_and_equivalents": ("Cash And Cash Equivalents", "Cash Cash Equivalents And Short Term Investments"),
+        "total_debt": ("Total Debt",),
+    },
+    "cashflow": {
+        "operating_cash_flow": ("Operating Cash Flow",),
+        "capital_expenditure": ("Capital Expenditure",),
+        "free_cash_flow": ("Free Cash Flow",),
+    },
+}
 
 MARKETS = [
     {"market": "USA", "suffix": "(none)", "example": "AAPL"},
@@ -56,7 +81,7 @@ MARKETS = [
 mcp = FastMCP(
     "market-data",
     instructions=(
-        "Live stock prices and quarterly financials from Yahoo Finance. "
+        "Live stock prices plus quarterly and annual financials from Yahoo Finance. "
         "Every amount is in raw currency units (not thousands or millions); check the currency fields."
     ),
 )
@@ -87,15 +112,20 @@ def normalize_ticker(ticker: str) -> str:
     return cleaned
 
 
-def _clean_number(value: Any) -> float | None:
-    """yfinance uses NaN for blanks. Blanks must stay blank (None), never 0."""
+def _clean_number(value: Any) -> int | float | None:
+    """yfinance uses NaN for blanks. Blanks must stay blank (None), never 0.
+
+    Whole numbers become ints: seen live, "281724000000.0 USD" was copied into a report as is.
+    """
     if value is None:
         return None
     try:
         number = float(value)
     except (TypeError, ValueError):
         return None
-    return None if math.isnan(number) or math.isinf(number) else number
+    if math.isnan(number) or math.isinf(number):
+        return None
+    return int(number) if number.is_integer() else number
 
 
 def format_amount(value: float | None, currency: str) -> str | None:
@@ -238,6 +268,64 @@ def build_quarterly(ticker: str, stmt, currency: str | None, quarters: int) -> d
     }
 
 
+def build_annual(ticker: str, statements: dict, currency: str | None, trading_currency: str | None,
+                 years: int) -> dict:
+    """Headline annual figures (income statement, balance sheet, cash flow), newest year first."""
+    usable = {name: df for name, df in statements.items() if df is not None and not getattr(df, "empty", True)}
+    if not usable:
+        return {"ok": False, "error_type": "not_found",
+                "error": f"No annual financial statements available for '{ticker}'."}
+
+    rows_used, series = {}, {}
+    for name, items in ANNUAL_ITEMS.items():
+        if name not in usable:
+            continue
+        for field, candidates in items.items():
+            row_name, row = _first_row(usable[name], candidates)
+            if row is not None:
+                rows_used[field], series[field] = row_name, row
+
+    # Year-ends come from the income statement when there is one: the balance sheet often has an
+    # extra, mostly blank, older year.
+    base = usable.get("income_stmt", next(iter(usable.values())))
+    year_ends = sorted({c for c in base.columns}, reverse=True)
+    rows, blanks = [], 0
+    for end in year_ends:
+        row = {"fiscal_year_end": end.date().isoformat()}
+        for field in rows_used:
+            value = _clean_number(series[field].get(end))
+            row[field], row[f"{field}_display"] = value, format_amount(value, currency or "")
+            blanks += value is None
+        if any(row[f] is not None for f in rows_used):  # Yahoo pads with all-blank years
+            rows.append(row)
+        if len(rows) == years:
+            break
+
+    warnings_: list[str] = []
+    missing = [f for items in ANNUAL_ITEMS.values() for f in items if f not in rows_used]
+    if missing:
+        warnings_.append(f"Not available from Yahoo for this company: {', '.join(missing)}.")
+    if blanks:
+        warnings_.append(f"{blanks} value(s) are missing (null). Report them as unavailable, never as zero.")
+    if currency and trading_currency and currency != trading_currency:
+        warnings_.append(f"Statements are reported in {currency}, but the shares trade in {trading_currency}.")
+    if len(rows) < years:
+        warnings_.append(f"Only {len(rows)} fiscal year(s) available; {years} requested.")
+
+    return {
+        "ok": True,
+        "ticker": ticker,
+        "currency": currency,
+        "unit": "raw currency units (not thousands or millions)",
+        "years": rows,
+        "rows_used": rows_used,
+        "warnings": warnings_,
+        "source": SOURCE,
+        "note": "Yahoo's standardised figures: line items can differ slightly from the company's own report.",
+        "as_of": _now(),
+    }
+
+
 # --- MCP tools --------------------------------------------------------------------
 
 
@@ -246,7 +334,7 @@ def get_quote(ticker: str) -> dict:
     """Get the latest stock price, market cap and trailing P/E for one company.
 
     Use for "current price", "market cap", "valuation" questions. Not for
-    revenue or profit history (use get_quarterly_financials) and not for
+    revenue or profit history (use get_quarterly_financials / get_annual_financials) and not for
     anything stated in annual reports (use the filings tools).
 
     Args:
@@ -289,6 +377,37 @@ def get_quarterly_financials(ticker: str, quarters: int = 4) -> dict:
         return build_quarterly(symbol, stmt, currency, quarters)
 
     return _safe("get_quarterly_financials", ("quarterly", str(ticker).strip().upper(), quarters), compute)
+
+
+@mcp.tool()
+def get_annual_financials(ticker: str, years: int = 4) -> dict:
+    """Get yearly figures for ANY listed company, newest fiscal year first.
+
+    Includes revenue, gross profit, operating income, net income, total assets,
+    total liabilities, shareholders' equity, cash, total debt, operating cash flow,
+    capital expenditure and free cash flow. Use for "annual revenue", "fiscal 2025
+    profit", "balance sheet", "cash flow" questions. Amounts are raw currency units
+    in the company's REPORTING currency.
+
+    Args:
+        ticker: Yahoo ticker with exchange suffix, e.g. MSFT, INFY.NS, 6758.T.
+        years: how many recent fiscal years to return, 1-5 (default 4).
+
+    Each year is labelled by its `fiscal_year_end` date (fiscal years differ by
+    company: Microsoft's ends in June, Indian companies' in March). Null means
+    unavailable, never zero. Read `warnings`.
+    """
+    def compute() -> dict:
+        symbol = normalize_ticker(ticker)
+        if not isinstance(years, int) or not 1 <= years <= MAX_YEARS:
+            raise ToolInputError(f"years must be an integer from 1 to {MAX_YEARS}")
+        tk = yf.Ticker(symbol)
+        statements = {name: _yahoo(lambda name=name: getattr(tk, name)) for name in ANNUAL_ITEMS}
+        info = _yahoo(lambda: tk.info) or {}
+        currency = info.get("financialCurrency") or info.get("currency")
+        return build_annual(symbol, statements, currency, info.get("currency"), years)
+
+    return _safe("get_annual_financials", ("annual", str(ticker).strip().upper(), years), compute)
 
 
 @mcp.tool()
