@@ -8,10 +8,10 @@ import asyncio
 
 import pytest
 
-from src.mcp_servers import calculator_server, filings_server, market_server, news_server
+from src.mcp_servers import calculator_server, filings_server, market_server, news_server, sec_server
 from src.mcp_servers.common import ERROR_TYPES
 
-SERVERS = [market_server, filings_server, calculator_server, news_server]
+SERVERS = [market_server, filings_server, calculator_server, news_server, sec_server]
 
 # One deliberately bad call per tool. Validation must catch it before any network/API use.
 BAD_CALLS = [
@@ -26,6 +26,8 @@ BAD_CALLS = [
     (calculator_server.convert_units, {"value": 1, "from_unit": "x", "to_unit": "raw"}),
     (calculator_server.series_change, {"points": []}),
     (news_server.search_news, {"query": ""}),
+    (sec_server.get_sec_financials, {"ticker": "MSFT", "period": "monthly"}),
+    (sec_server.get_sec_filings, {"ticker": "MSFT", "count": 0}),
 ]
 
 

@@ -23,12 +23,13 @@ from typing import Annotated, Literal, TypedDict
 from pydantic import BaseModel, Field, ValidationError
 
 MAX_STEPS = 5
-StepKind = Literal["market", "filings", "news", "any"]
+StepKind = Literal["market", "filings", "sec", "news", "any"]
 
 # What the LLM might write -> what we use.
 KIND_SYNONYMS = {
     "market": "market", "price": "market", "quote": "market", "quarterly": "market", "stock": "market",
     "filings": "filings", "filing": "filings", "annual_report": "filings", "report": "filings", "rag": "filings",
+    "sec": "sec", "edgar": "sec", "sec_edgar": "sec", "xbrl": "sec", "10-k": "sec", "10-q": "sec",
     "news": "news", "web": "news",
     "any": "any", "research": "any", "general": "any",
 }

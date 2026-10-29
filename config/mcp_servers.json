@@ -19,6 +19,11 @@
       "module": "src.mcp_servers.news_server",
       "description": "Recent news articles (Tavily)",
       "enabled": true
+    },
+    "sec": {
+      "module": "src.mcp_servers.sec_server",
+      "description": "Official reported figures and latest filings of US-listed companies (SEC EDGAR)",
+      "enabled": true
     }
   }
 }

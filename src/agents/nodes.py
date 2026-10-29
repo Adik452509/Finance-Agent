@@ -31,12 +31,13 @@ from src.observability.guardrails import with_disclaimer
 from src.rag.qa import _message_text, normalize_answer
 
 RESEARCH_TOOLS = {"get_quote", "get_quarterly_financials", "get_annual_financials", "list_supported_markets",
-                  "search_filings", "list_filings", "search_news"}
+                  "search_filings", "list_filings", "get_sec_financials", "get_sec_filings", "search_news"}
 CALC_TOOLS = {"percent_change", "cagr", "ratio", "share_of_total", "convert_units", "series_change"}
 # Each plan step gets only its source's tools (an "any" step gets all of RESEARCH_TOOLS).
 # Seen live: a market step for Microsoft still called search_filings, which could only fail.
 STEP_TOOLS = {"market": {"get_quote", "get_quarterly_financials", "get_annual_financials", "list_supported_markets"},
               "filings": {"search_filings", "list_filings"},
+              "sec": {"get_sec_financials", "get_sec_filings"},
               "news": {"search_news"}}
 
 Events = Callable[[str, dict], None] | None
@@ -60,20 +61,26 @@ def indexed_tickers() -> set[str]:
 
 
 def reroute_unindexed(plan: dict, known: set[str]) -> tuple[dict, list[str]]:
-    """Turn filings steps for companies with no indexed annual report into market steps.
+    """Send filings steps for companies with no indexed annual report to a source that has them.
 
     Seen live: asked about Microsoft, the planner chose filings anyway; the search could only
-    fail, so market data (which covers any listed company) was never tried.
+    fail. A US ticker (no exchange suffix) goes to the SEC's official figures; anything else
+    to market data, which covers any listed company.
     """
     known_bases = {_base_ticker(t) for t in known}
     notes = []
     for step in plan["steps"]:
         ticker = step.get("ticker")
         if step["kind"] == "filings" and ticker and _base_ticker(ticker) not in known_bases:
-            step["kind"] = "market"
-            step["goal"] += (f" (no annual report for {ticker} is indexed: use market data - annual and quarterly "
-                             f"statement figures from Yahoo Finance)")
-            notes.append(f"planner: no annual report indexed for {ticker}; filings step switched to market data")
+            if "." not in ticker:
+                step["kind"] = "sec"
+                step["goal"] += f" (no annual report for {ticker} is indexed: use its official SEC figures)"
+                notes.append(f"planner: no annual report indexed for {ticker}; filings step switched to SEC data")
+            else:
+                step["kind"] = "market"
+                step["goal"] += (f" (no annual report for {ticker} is indexed: use market data - annual and quarterly "
+                                 f"statement figures from Yahoo Finance)")
+                notes.append(f"planner: no annual report indexed for {ticker}; filings step switched to market data")
     return plan, notes
 
 
@@ -342,6 +349,8 @@ def make_researcher(llm: BaseChatModel, tools: list[BaseTool], max_rounds: int =
         # A filings search without a ticker returns other companies' pages: pin it to the step's company.
         defaults = {"search_filings": {"ticker": ticker}} if ticker else None
         step_tools = only(research_tools, STEP_TOOLS[step["kind"]]) if step["kind"] in STEP_TOOLS else research_tools
+        # Its server is down or disabled: better any real source than a researcher with no tools at all.
+        step_tools = step_tools or research_tools
         return await run_tool_loop(llm, step_tools, messages, agent="researcher", max_rounds=max_rounds,
                                    compact_older_results=compact_older_results, on_event=on_event,
                                    default_args=defaults)

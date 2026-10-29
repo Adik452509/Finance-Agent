@@ -75,6 +75,8 @@ class Settings(BaseSettings):
     anthropic_api_key: str | None = None
     tavily_api_key: str | None = None
     langsmith_api_key: str | None = None
+    # Not a secret: SEC EDGAR requires "AppName contact-email" on every request (no key exists).
+    sec_user_agent: str | None = None
 
     # --- Optional model overrides -----------------------------------------
     # Leave empty in .env to use the MODEL_MAP defaults above.

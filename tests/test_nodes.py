@@ -410,16 +410,32 @@ def test_company_check_flags_another_companys_page():
     assert company_problems(APPLE_FIGURE_FOR_MSFT, None) == []  # fallback plan: no ticker to compare
 
 
-def test_filings_step_for_an_unindexed_company_becomes_a_market_step():
-    # Seen live: asked about Microsoft, the planner chose filings; market data was never tried.
+def test_filings_step_for_an_unindexed_company_is_rerouted():
+    # Seen live: asked about Microsoft, the planner chose filings; the search could only fail.
     plan = ('{"steps": [{"kind": "filings", "ticker": "MSFT", "goal": "Revenue FY2025"}, '
+            '{"kind": "filings", "ticker": "INFY.NS", "goal": "Revenue FY2025"}, '
             '{"kind": "filings", "ticker": "RELIANCE.NS", "goal": "Revenue 2024-25"}], "needs_calculation": false}')
     out = run(make_planner(scripted(AIMessage(content=plan)), companies="", known_tickers={"RELIANCE.NS", "AAPL"}),
-              {"question": "Compare Microsoft and Reliance revenue"})
-    msft, ril = out["plan"]["steps"]
-    assert msft["kind"] == "market" and "annual and quarterly statement figures" in msft["goal"]
-    assert ril["kind"] == "filings" and ril["goal"] == "Revenue 2024-25"
+              {"question": "Compare Microsoft, Infosys and Reliance revenue"})
+    msft, infy, ril = out["plan"]["steps"]
+    assert msft["kind"] == "sec" and "official SEC figures" in msft["goal"]          # US ticker
+    assert infy["kind"] == "market" and "Yahoo Finance" in infy["goal"]              # listed outside the US
+    assert ril["kind"] == "filings" and ril["goal"] == "Revenue 2024-25"             # indexed: unchanged
     assert any("no annual report indexed for MSFT" in w for w in out["warnings"])
+
+
+def test_planner_can_choose_the_sec_kind():
+    from src.agents.state import parse_plan
+
+    plan, _ = parse_plan('{"steps": [{"kind": "EDGAR", "ticker": "nvda", "goal": "Latest quarterly revenue"}]}')
+    assert plan.steps[0].kind == "sec" and plan.steps[0].ticker == "NVDA"
+
+
+def test_a_step_whose_server_is_down_still_gets_real_tools():
+    steps = [{"id": 1, "kind": "sec", "ticker": "MSFT", "goal": "Revenue FY2026"}]  # no SEC tools in TOOLS
+    model = scripted(tool_call("get_quote", {"ticker": "MSFT"}), AIMessage(content="- NOT FOUND: revenue"))
+    out = run(make_researcher(model, TOOLS), plan_state(steps))
+    assert out["tool_calls"][0]["ok"] is True
 
 
 def test_each_step_only_gets_its_sources_tools():
