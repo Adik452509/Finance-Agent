@@ -1,7 +1,8 @@
 """The one place that opens the vector store.
 
 Both the indexer (writes) and the retriever (reads) go through here, so
-swapping Chroma for another vector database means changing this file only.
+swapping Chroma for another vector database means changing this file only
+(Phase 6.2 did exactly that: FILINGS_STORE=postgres selects pgvector).
 """
 
 import logging
@@ -16,7 +17,20 @@ logger = logging.getLogger(__name__)
 
 
 def get_collection(reset: bool = False) -> Collection:
-    """Open (or create) the Chroma collection, guarding against model mixing."""
+    """Open the filings store named by FILINGS_STORE, guarding against model mixing.
+
+    "local" (default): the Chroma folder on disk. "postgres": pgvector in DATABASE_URL
+    (src/rag/pgstore.py), with the same API, so callers don't know which one they got.
+    """
+    if settings.filings_store == "postgres":
+        from src.rag.pgstore import open_pg_collection
+
+        return open_pg_collection(reset=reset)  # type: ignore[return-value]
+    return open_chroma_collection(reset)
+
+
+def open_chroma_collection(reset: bool = False) -> Collection:
+    """The local Chroma collection (also read by scripts/migrate_to_postgres.py)."""
     settings.ensure_dirs()
     client = chromadb.PersistentClient(
         path=str(settings.chroma_dir),

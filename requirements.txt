@@ -36,6 +36,7 @@ httpx==0.28.1
 SQLAlchemy==2.1.6
 alembic==1.20.1
 psycopg[binary]==3.3.6
+pgvector==0.5.1   # binary vector transfer for the filings store (FILINGS_STORE=postgres)
 
 # --- Dev ---
 pytest==8.4.1

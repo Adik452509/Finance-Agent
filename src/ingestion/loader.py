@@ -93,10 +93,21 @@ class Page:
 # --- Registry ----------------------------------------------------------------
 
 
+def registry_entries() -> list[dict]:
+    """The raw registry: the documents table (FILINGS_STORE=postgres) or config/documents.json."""
+    if settings.filings_store == "postgres":
+        from src.db.repository import document_entry, list_documents
+        from src.db.session import session_scope
+
+        with session_scope() as db:
+            return [document_entry(d) for d in list_documents(db)]
+    return json.loads(settings.documents_registry.read_text(encoding="utf-8"))
+
+
 def load_registry(path: Path | None = None) -> list[DocumentMeta]:
-    """Read and validate config/documents.json."""
-    path = path or settings.documents_registry
-    entries = json.loads(path.read_text(encoding="utf-8"))
+    """Read and validate the registry (a given JSON file, or wherever FILINGS_STORE says)."""
+    entries = json.loads(path.read_text(encoding="utf-8")) if path else registry_entries()
+    path = path or settings.documents_registry  # only used to name the source in error messages
 
     docs: list[DocumentMeta] = []
     seen: set[str] = set()

@@ -90,6 +90,9 @@ class Settings(BaseSettings):
     # Empty = a local SQLite file (data/app.db). Deployed: Supabase's Postgres URL. It holds the
     # database password, so it lives only in .env and is never printed (see masked_database_url).
     database_url: str | None = None
+    # Where the filings library lives: "local" = Chroma folder + config/documents.json (laptop);
+    # "postgres" = pgvector + the documents table in DATABASE_URL (deployed: survives restarts).
+    filings_store: Literal["local", "postgres"] = "local"
     daily_question_quota: int = 10  # per user per day: the shared Groq budget is the real limit
     admin_emails: str = ""          # comma-separated: these users get the admin page and no quota
 
@@ -129,6 +132,8 @@ class Settings(BaseSettings):
         # A batch must fit at least one full chunk (plus its repeated header).
         if self.embed_chars_per_minute < self.chunk_size + 500:
             raise ValueError("EMBED_CHARS_PER_MINUTE must exceed CHUNK_SIZE + 500.")
+        if self.filings_store == "postgres" and not (self.database_url or "").startswith(("postgresql", "postgres")):
+            raise ValueError("FILINGS_STORE=postgres needs DATABASE_URL to be a Postgres URL.")
         return self
 
     # --- Derived values ----------------------------------------------------

@@ -16,7 +16,7 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from config.settings import settings
-from src.db.models import AnswerCache, Conversation, Feedback, Job, Message, Usage, User, utcnow
+from src.db.models import AnswerCache, Conversation, Document, Feedback, Job, Message, Usage, User, utcnow
 
 TITLE_CHARS = 60
 UNLIMITED = 10**6
@@ -218,6 +218,49 @@ def set_feedback(db: Session, user_id: str, message_id: str, rating: int, commen
         row.rating, row.comment = rating, comment
     db.flush()
     return True
+
+
+# --- documents (the filings library when FILINGS_STORE=postgres) ------------------------------------------
+
+DOCUMENT_FIELDS = ("file", "company", "ticker", "market", "doc_type", "fiscal_year_end", "currency",
+                   "reporting_unit", "source", "source_url", "filed", "pages")
+
+
+def _base_ticker(ticker: str) -> str:
+    return ticker.strip().upper().split(".")[0]
+
+
+def document_entry(doc: Document) -> dict:
+    """A row as the same dict config/documents.json holds."""
+    return {f: getattr(doc, f) for f in DOCUMENT_FIELDS}
+
+
+def list_documents(db: Session) -> list[Document]:
+    return list(db.scalars(select(Document).order_by(Document.created_at, Document.file)))
+
+
+def documents_for_ticker(db: Session, ticker: str) -> list[dict]:
+    return [document_entry(d) for d in list_documents(db) if _base_ticker(d.ticker) == _base_ticker(ticker)]
+
+
+def replace_document(db: Session, entry: dict, status: str = "registered", chunks: int = 0) -> list[dict]:
+    """Add a report, replacing the same company's older one(s); returns the replaced entries."""
+    replaced = [d for d in list_documents(db) if _base_ticker(d.ticker) == _base_ticker(entry["ticker"])]
+    old = [document_entry(d) for d in replaced]
+    for doc in replaced:
+        db.delete(doc)
+    db.flush()
+    db.add(Document(**{f: str(entry.get(f) or "") for f in DOCUMENT_FIELDS}, status=status, chunks=chunks))
+    db.flush()
+    return old
+
+
+def set_document_status(db: Session, file: str, status: str, chunks: int | None = None) -> None:
+    doc = db.scalar(select(Document).where(Document.file == file))
+    if doc is not None:
+        doc.status = status
+        if chunks is not None:
+            doc.chunks = chunks
 
 
 # --- jobs (background work) ---------------------------------------------------------------------------

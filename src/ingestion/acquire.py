@@ -247,13 +247,29 @@ def _base(ticker: str) -> str:
     return ticker.strip().upper().split(".")[0]
 
 
+def _in_database(path: Path | None) -> bool:
+    return path is None and settings.filings_store == "postgres"
+
+
 def registered(ticker: str, path: Path | None = None) -> list[dict]:
+    if _in_database(path):
+        from src.db.repository import documents_for_ticker
+        from src.db.session import session_scope
+
+        with session_scope() as db:
+            return documents_for_ticker(db, ticker)
     path = path or settings.documents_registry
     return [e for e in json.loads(path.read_text(encoding="utf-8")) if _base(e["ticker"]) == _base(ticker)]
 
 
 def register(entry: dict, path: Path | None = None) -> list[dict]:
     """Add the entry, replacing the same company's older entries; returns the replaced ones."""
+    if _in_database(path):  # deployed: the documents table, so an added company survives restarts
+        from src.db.repository import replace_document
+        from src.db.session import session_scope
+
+        with session_scope() as db:
+            return replace_document(db, entry)
     path = path or settings.documents_registry
     entries = json.loads(path.read_text(encoding="utf-8"))
     replaced = [e for e in entries if _base(e["ticker"]) == _base(entry["ticker"])]
