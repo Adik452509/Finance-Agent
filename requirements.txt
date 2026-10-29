@@ -32,6 +32,11 @@ langgraph==1.0.1
 # Already installed with mcp; pinned because news_server imports it directly.
 httpx==0.28.1
 
+# --- Phase 6: database (SQLite on a laptop, Postgres + pgvector when deployed) ---
+SQLAlchemy==2.1.6
+alembic==1.20.1
+psycopg[binary]==3.3.6
+
 # --- Dev ---
 pytest==8.4.1
 rich==14.1.0

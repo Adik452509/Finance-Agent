@@ -6,6 +6,7 @@ Every other module does `from config.settings import settings` so that:
   - swapping LLM providers is a one-line change in .env, not a code change
 """
 
+import re
 from pathlib import Path
 from typing import Literal
 
@@ -85,6 +86,13 @@ class Settings(BaseSettings):
     default_model_override: str | None = None
     reasoning_model_override: str | None = None
 
+    # --- App database (Phase 6) -------------------------------------------
+    # Empty = a local SQLite file (data/app.db). Deployed: Supabase's Postgres URL. It holds the
+    # database password, so it lives only in .env and is never printed (see masked_database_url).
+    database_url: str | None = None
+    daily_question_quota: int = 10  # per user per day: the shared Groq budget is the real limit
+    admin_emails: str = ""          # comma-separated: these users get the admin page and no quota
+
     # --- Paths -------------------------------------------------------------
     project_root: Path = PROJECT_ROOT
     data_dir: Path = PROJECT_ROOT / "data"
@@ -134,6 +142,21 @@ class Settings(BaseSettings):
     def reasoning_model(self) -> str:
         """Model name for analysis/critique steps, honouring an .env override."""
         return self.reasoning_model_override or MODEL_MAP[self.llm_provider]["reasoning"]
+
+    @property
+    def app_database_url(self) -> str:
+        """SQLAlchemy URL: DATABASE_URL (psycopg 3 driver for Postgres) or the local SQLite file."""
+        if not self.database_url:
+            return f"sqlite:///{(self.data_dir / 'app.db').as_posix()}"
+        url = self.database_url.strip()
+        for prefix in ("postgresql://", "postgres://"):  # Supabase gives a plain postgresql:// URL
+            if url.startswith(prefix):
+                return "postgresql+psycopg://" + url[len(prefix):]
+        return url
+
+    def masked_database_url(self) -> str:
+        """The database URL with the password replaced, safe to print or log."""
+        return re.sub(r"(://[^:/@]+:)[^@]+@", r"\1***@", self.app_database_url)
 
     @property
     def active_api_key(self) -> str | None:
