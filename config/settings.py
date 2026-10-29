@@ -77,6 +77,8 @@ class Settings(BaseSettings):
     langsmith_api_key: str | None = None
     # Not a secret: SEC EDGAR requires "AppName contact-email" on every request (no key exists).
     sec_user_agent: str | None = None
+    # Japan's FSA EDINET API v2 (free key: https://api.edinet-fsa.go.jp/api/auth/index.aspx?mode=1)
+    edinet_api_key: str | None = None
 
     # --- Optional model overrides -----------------------------------------
     # Leave empty in .env to use the MODEL_MAP defaults above.
@@ -154,6 +156,7 @@ class Settings(BaseSettings):
             "ANTHROPIC_API_KEY",
             "TAVILY_API_KEY",
             "LANGSMITH_API_KEY",
+            "EDINET_API_KEY",
         ]
         return {
             name: "set" if getattr(self, name.lower()) else "missing"

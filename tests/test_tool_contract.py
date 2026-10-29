@@ -8,10 +8,10 @@ import asyncio
 
 import pytest
 
-from src.mcp_servers import calculator_server, filings_server, market_server, news_server, sec_server
+from src.mcp_servers import calculator_server, edinet_server, filings_server, market_server, news_server, sec_server
 from src.mcp_servers.common import ERROR_TYPES
 
-SERVERS = [market_server, filings_server, calculator_server, news_server, sec_server]
+SERVERS = [market_server, filings_server, calculator_server, news_server, sec_server, edinet_server]
 
 # One deliberately bad call per tool. Validation must catch it before any network/API use.
 BAD_CALLS = [
@@ -28,6 +28,8 @@ BAD_CALLS = [
     (news_server.search_news, {"query": ""}),
     (sec_server.get_sec_financials, {"ticker": "MSFT", "period": "monthly"}),
     (sec_server.get_sec_filings, {"ticker": "MSFT", "count": 0}),
+    (edinet_server.get_edinet_financials, {"ticker": "7203.T", "report": "quarterly"}),
+    (edinet_server.get_edinet_filings, {"ticker": "7203.T", "count": 0}),
 ]
 
 

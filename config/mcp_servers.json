@@ -24,6 +24,11 @@
       "module": "src.mcp_servers.sec_server",
       "description": "Official reported figures and latest filings of US-listed companies (SEC EDGAR)",
       "enabled": true
+    },
+    "edinet": {
+      "module": "src.mcp_servers.edinet_server",
+      "description": "Official figures of Japanese listed companies from FSA filings (EDINET); needs EDINET_API_KEY",
+      "enabled": false
     }
   }
 }
