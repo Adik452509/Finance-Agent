@@ -2,6 +2,7 @@
 
 import streamlit as st
 
+from config.settings import settings
 from frontend import components
 
 
@@ -25,6 +26,10 @@ def page() -> None:
         st.button("Sign in with Google", icon=":material/login:", type="primary", width="stretch", on_click=st.login)
         st.caption("We use your Google account only to know it's you: your email and name. "
                    "Research summaries are automated and not financial advice.")
+        if settings.public_app_url.startswith("https://"):
+            # On huggingface.co the app runs inside a frame, and Google won't show sign-in in a frame.
+            st.caption(f":material/open_in_new: Sign-in not opening? Use the app directly: "
+                       f"[{settings.public_app_url.removeprefix('https://')}]({settings.public_app_url})")
 
 
 def denied(reason: str) -> None:
