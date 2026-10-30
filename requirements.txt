@@ -45,6 +45,7 @@ uvicorn==0.53.0
 # --- Phase 6.5: frontend (the Research Desk) ---
 streamlit==1.66.1
 altair==6.3.0
+Authlib==1.9.1   # Streamlit's st.login (Google sign-in, Phase 6.6)
 
 # --- Dev ---
 pytest==8.4.1
