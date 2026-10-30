@@ -1,0 +1,26 @@
+# Never in the image: secrets (they arrive as environment variables / Space secrets)
+.env
+*.env
+!.env.example
+.streamlit/secrets.toml
+
+# Local data: the deployed app reads filings and chats from Postgres (FILINGS_STORE=postgres)
+data/raw/*
+data/chroma/*
+data/cache/
+# "**/" = in ANY folder: a bare "*.db" only matches the top folder, and data/app.db (local chats,
+# emails) slipped into the first image build.
+**/*.db
+**/*.sqlite3
+
+# Personal docs, tests, tooling
+docs/
+tests/
+.git/
+.github/
+.vscode/
+.idea/
+.pytest_cache/
+**/__pycache__/
+*.pyc
+.claude/

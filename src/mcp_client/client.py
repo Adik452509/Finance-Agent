@@ -20,6 +20,7 @@ Design choices:
 
 import json
 import logging
+import os
 import re
 import sys
 from contextlib import AsyncExitStack
@@ -84,12 +85,20 @@ def load_server_specs(
 
 
 def build_connection(spec: ServerSpec) -> dict:
-    """stdio connection: run the module with this venv's Python from the project root."""
+    """stdio connection: run the module with this venv's Python from the project root.
+
+    env: the MCP client otherwise starts servers with only a few "safe" variables (PATH,
+    HOME...). On a laptop the servers still found their keys in .env; in the container keys
+    exist only as environment variables (no .env in the image), so every server started
+    without them (seen in the first Docker run). The servers are our own code, as trusted as
+    this process, so they get its environment.
+    """
     return {
         "transport": "stdio",
         "command": sys.executable,
         "args": ["-m", spec.module],
         "cwd": str(settings.project_root),
+        "env": {**os.environ, "PYTHONIOENCODING": "utf-8"},
         "encoding": "utf-8",  # figures include ₹ and ¥
         "session_kwargs": {"read_timeout_seconds": timedelta(seconds=TOOL_TIMEOUT_SECONDS)},
     }

@@ -1,0 +1,23 @@
+# Run the production image on your laptop (Phase 6.7).
+#
+#   docker compose up --build        # then open http://localhost:8501
+#
+# Default: LOCAL data (your data/ folder: Chroma filings + SQLite chats), because some networks
+# block Supabase's port 5432. To run exactly as deployed (Supabase + pgvector), comment out the
+# three "local data" lines below and run on a network that allows Postgres.
+services:
+  research-desk:
+    build: .
+    image: research-desk:latest
+    env_file: .env                         # your keys; never copied into the image
+    environment:
+      APP_ENV: production                  # the real thing: Google login and the API token are required
+      PUBLIC_APP_URL: http://localhost:8501  # matches the redirect URI registered with Google
+      # --- local data (remove these three lines to use Supabase) ---
+      FILINGS_STORE: local
+      DATABASE_URL: sqlite:////app/data/app.db
+    volumes:
+      - ./data:/app/data                   # local data (remove with the lines above)
+    ports:
+      - "8501:7860"                        # host 8501 -> container 7860 (Hugging Face's port)
+    restart: unless-stopped

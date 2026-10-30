@@ -155,6 +155,9 @@ def app(monkeypatch):
     from config.settings import settings
 
     monkeypatch.setattr(session, "ApiClient", FakeApi)
+    # These tests are about the desk, not login: independent of whatever Google keys .env holds.
+    monkeypatch.setattr(settings, "google_oauth_client_id", None)
+    monkeypatch.setattr(settings, "app_env", "dev")
     return AppTest.from_file(str(settings.project_root / "frontend" / "app.py"), default_timeout=30)
 
 
