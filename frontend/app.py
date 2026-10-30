@@ -13,10 +13,11 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # `streamlit run` puts only frontend/ on the path
 
-from frontend import notes  # noqa: E402
+from config.settings import settings  # noqa: E402
+from frontend import components, notes  # noqa: E402
 from frontend.api_client import ApiError, BackendDown  # noqa: E402
-from frontend.session import api, me, open_conversation  # noqa: E402
-from frontend.views import admin, library, research  # noqa: E402
+from frontend.session import api, identity, open_conversation  # noqa: E402
+from frontend.views import admin, library, research, signin  # noqa: E402
 
 st.set_page_config(page_title="Research Desk · Financial Research Agent", page_icon=":material/query_stats:",
                    layout="wide", initial_sidebar_state="auto")  # auto: collapsed on phones
@@ -56,7 +57,10 @@ def sidebar(profile: dict) -> None:
             st.progress(1 - left / quota if quota else 1.0,
                         text=f"{left} of {quota} questions left today")
             st.caption("Resets at midnight UTC · reused answers are free")
-        st.caption(f":material/account_circle: {profile.get('name') or profile['email']}")
+        with st.container(horizontal=True, vertical_alignment="center"):
+            st.caption(f":material/account_circle: {profile.get('name') or profile['email']}")
+            if settings.google_login_configured:
+                st.button("Sign out", icon=":material/logout:", type="tertiary", on_click=st.logout)
 
 
 def backend_down(error: Exception) -> None:
@@ -68,19 +72,24 @@ def backend_down(error: Exception) -> None:
 
 
 def main() -> None:
+    _, _, problem = identity()
+    if problem == "signed_out":
+        signin.page()
+        return
+    if problem:
+        signin.denied(problem)
+        return
     try:
-        api().me()
+        profile = st.session_state["_me"] = api().me()  # me() reuses it for the rest of this run
     except BackendDown as e:
         backend_down(e)
         return
     except ApiError as e:
         st.error(f"The research service refused this app ({e.status}): {e.detail}", icon=":material/lock:")
         return
-    profile = me()
     # The wordmark is light text for the navy sidebar; when the sidebar is collapsed (phones) the
     # header is light, so show only the mark there (seen live: the wordmark was invisible).
-    assets = Path(__file__).parent / "assets"
-    st.logo(str(assets / "logo.svg"), size="large", icon_image=str(assets / "logo_mark.svg"))
+    st.logo(str(components.ASSETS / "logo.svg"), size="large", icon_image=str(components.ASSETS / "logo_mark.svg"))
     pages = [st.Page(research.page, title="Research", icon=":material/query_stats:", url_path="research", default=True),
              st.Page(library.page, title="Library", icon=":material/library_books:", url_path="library")]
     if profile["is_admin"]:

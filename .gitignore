@@ -2,6 +2,8 @@
 .env
 *.env
 !.env.example
+# Streamlit login secrets (Google client secret, cookie secret): generated from .env at startup
+.streamlit/secrets.toml
 
 # Virtual environments
 .venv/

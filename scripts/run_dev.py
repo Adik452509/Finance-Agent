@@ -30,6 +30,12 @@ def main() -> int:
         env["FILINGS_STORE"] = "local"
         subprocess.run([sys.executable, "-m", "alembic", "upgrade", "head"], cwd=ROOT, env=env, check=True)
 
+    # Google login: render .streamlit/secrets.toml (git-ignored) from .env before Streamlit reads it.
+    sys.path.insert(0, str(ROOT))
+    from frontend.auth import write_secrets
+
+    print("Google login:", "on" if write_secrets() else "off (dev user; set GOOGLE_OAUTH_* in .env to turn it on)")
+
     backend = subprocess.Popen([sys.executable, "-m", "uvicorn", "src.api.app:app", "--host", "127.0.0.1",
                                 "--port", "8000"], cwd=ROOT, env=env)
     for _ in range(60):  # wait until the API answers before opening the app

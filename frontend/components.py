@@ -1,6 +1,7 @@
 """Building blocks of the Research Desk: answer cards, live research timeline, sources, trail, usage."""
 
 import time
+from pathlib import Path
 
 import altair as alt
 import pandas as pd
@@ -8,6 +9,7 @@ import streamlit as st
 
 from frontend import notes
 
+ASSETS = Path(__file__).parent / "assets"
 AGENT_ICONS = {"memory": ":material/history:", "cache": ":material/bolt:", "planner": ":material/checklist:",
                "researcher": ":material/manage_search:", "supervisor": ":material/alt_route:",
                "analyst": ":material/calculate:", "writer": ":material/edit_note:", "critic": ":material/fact_check:",

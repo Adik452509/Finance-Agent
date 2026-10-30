@@ -106,9 +106,21 @@ class Settings(BaseSettings):
 
     # --- Frontend (Phase 6.5) ------------------------------------------------
     api_base_url: str = "http://127.0.0.1:8000"
-    # Until Google login (6.6) the local app acts as this user. Ignored once login is on.
+    # Without Google login configured (dev only) the local app acts as this user.
     dev_user_email: str = "dev@example.com"
     dev_user_name: str = "Local developer"
+
+    # --- Google login (Phase 6.6) -----------------------------------------------
+    # From Google Cloud Console > Google Auth Platform > Clients (a "Web application" client).
+    google_oauth_client_id: str | None = None
+    google_oauth_client_secret: str | None = None
+    auth_cookie_secret: str | None = None      # random; signs Streamlit's login cookie
+    public_app_url: str = "http://localhost:8501"  # Google sends users back to <this>/oauth2callback
+    allowed_emails: str = ""                   # comma-separated; empty = any verified Google account
+
+    @property
+    def google_login_configured(self) -> bool:
+        return bool(self.google_oauth_client_id and self.google_oauth_client_secret and self.auth_cookie_secret)
 
     # --- Paths -------------------------------------------------------------
     project_root: Path = PROJECT_ROOT
@@ -150,6 +162,10 @@ class Settings(BaseSettings):
             raise ValueError("FILINGS_STORE=postgres needs DATABASE_URL to be a Postgres URL.")
         if self.app_env == "production" and len(self.internal_api_token or "") < 32:
             raise ValueError("APP_ENV=production needs INTERNAL_API_TOKEN (32+ random characters).")
+        if self.app_env == "production" and not self.google_login_configured:
+            # Without login the app would act as the shared dev user: every visitor one account.
+            raise ValueError("APP_ENV=production needs Google login: GOOGLE_OAUTH_CLIENT_ID, "
+                             "GOOGLE_OAUTH_CLIENT_SECRET and AUTH_COOKIE_SECRET.")
         return self
 
     # --- Derived values ----------------------------------------------------
@@ -201,6 +217,9 @@ class Settings(BaseSettings):
             "TAVILY_API_KEY",
             "LANGSMITH_API_KEY",
             "EDINET_API_KEY",
+            "GOOGLE_OAUTH_CLIENT_SECRET",
+            "AUTH_COOKIE_SECRET",
+            "INTERNAL_API_TOKEN",
         ]
         return {
             name: "set" if getattr(self, name.lower()) else "missing"
