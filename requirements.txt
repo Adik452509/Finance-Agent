@@ -38,6 +38,10 @@ alembic==1.20.1
 psycopg[binary]==3.3.6
 pgvector==0.5.1   # binary vector transfer for the filings store (FILINGS_STORE=postgres)
 
+# --- Phase 6.3: backend API (uvicorn + starlette already come with mcp) ---
+fastapi==0.162.0
+uvicorn==0.53.0
+
 # --- Dev ---
 pytest==8.4.1
 rich==14.1.0

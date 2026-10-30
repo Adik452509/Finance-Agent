@@ -34,7 +34,9 @@ def make_engine(url: str | None = None) -> Engine:
 
         return engine
     # Supabase's session pooler: keep a small pool and drop connections the pooler closed.
-    return create_engine(url, pool_size=5, max_overflow=5, pool_pre_ping=True, pool_recycle=300)
+    # connect_timeout: seen live, a network that blocks port 5432 made connecting hang forever.
+    return create_engine(url, pool_size=5, max_overflow=5, pool_pre_ping=True, pool_recycle=300,
+                         connect_args={"connect_timeout": 15})
 
 
 @lru_cache(maxsize=1)

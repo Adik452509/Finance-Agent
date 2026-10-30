@@ -15,6 +15,7 @@ chunks a day. The choice is stored in documents.json ("pages"), so re-indexing i
 import json
 import logging
 import re
+from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 
@@ -278,6 +279,70 @@ def register(entry: dict, path: Path | None = None) -> list[dict]:
     tmp.write_text(json.dumps(entries, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     tmp.replace(path)
     return replaced
+
+
+# --- the whole job: fetch, choose pages, register, index ---------------------------------------------
+
+
+def fetch_report(ticker: str, pdf: dict | None = None) -> dict:
+    """Download the latest annual report from the right source; returns a registry entry."""
+    if pdf:
+        return pdf_from_url(pdf["url"], {"ticker": ticker.upper(), **{k: v for k, v in pdf.items() if k != "url"}})
+    if ticker.upper().endswith(".T"):
+        return edinet_annual_report(ticker)
+    if "." in ticker:
+        raise AcquireError(f"{ticker} is not US- or Tokyo-listed: give a link to its annual report PDF "
+                           "(with company, market, doc_type, fiscal_year_end and currency).")
+    return sec_annual_report(ticker)
+
+
+def add_company(ticker: str, *, pdf: dict | None = None, max_chunks: int = DEFAULT_MAX_CHUNKS, force: bool = False,
+                dry_run: bool = False, progress: Callable[[str], None] | None = None) -> dict:
+    """Fetch, choose pages, register and index a company's latest annual report.
+
+    Used by scripts/add_company.py and by the backend's job worker. Replaces the company's
+    older report (and its chunks). Raises AcquireError with a message for the user.
+    """
+    from src.ingestion.chunker import chunk_pages
+    from src.ingestion.indexer import index_chunks
+    from src.rag.store import get_collection
+
+    say = progress or (lambda message: None)
+    existing = registered(ticker)
+    if any(not e.get("source") for e in existing) and not force:
+        raise AcquireError(f"{ticker} has a report added by hand ({existing[0]['file']}); use force to replace it")
+    say("Downloading the latest annual report")
+    entry, stats = prepare(fetch_report(ticker, pdf), max_chunks)
+    result = {"entry": entry, **stats, "embedded": 0, "complete": False}
+    say(f"{entry['company']} {entry['doc_type']} (FY ended {entry['fiscal_year_end']}): {stats['pages_chosen']} pages, "
+        f"{stats['chunks']} chunks, ~{stats['minutes']} min")
+    if dry_run:
+        return result
+
+    replaced = register(entry)
+    collection = get_collection()
+    for old in replaced:
+        if old["file"] != entry["file"]:
+            collection.delete(where={"file": old["file"]})
+            if old.get("source"):  # only files we downloaded ourselves are deleted
+                (settings.raw_dir / old["file"]).unlink(missing_ok=True)
+    result["replaced"] = [old["file"] for old in replaced if old["file"] != entry["file"]]
+
+    def on_batch(n: int, total: int, embedded: int) -> None:
+        say(f"Embedding: batch {n}/{total} ({embedded} chunks)")
+
+    report = index_chunks(chunk_pages(load_document(DocumentMeta(**entry))), collection, on_batch=on_batch)
+    result.update(embedded=report.embedded, already_indexed=report.already_indexed,
+                  complete=report.complete, stopped_reason=report.stopped_reason)
+    if settings.filings_store == "postgres":
+        from src.db.repository import set_document_status
+        from src.db.session import session_scope
+
+        with session_scope() as db:
+            set_document_status(db, entry["file"], "ready" if report.complete else "error",
+                                chunks=report.embedded + report.already_indexed)
+    say("Done" if report.complete else f"Stopped: {report.stopped_reason}")
+    return result
 
 
 def latest_filing_date(entry: dict) -> str | None:

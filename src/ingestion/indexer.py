@@ -17,6 +17,7 @@ Why it is built this way:
 
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from chromadb.api.models.Collection import Collection
@@ -110,8 +111,12 @@ def _embed_with_retry(texts: list[str]) -> list[list[float]]:
     raise AssertionError("unreachable")
 
 
-def index_chunks(chunks: list[Chunk], collection: Collection) -> IndexReport:
-    """Embed and store every chunk not already in the collection."""
+def index_chunks(chunks: list[Chunk], collection: Collection,
+                 on_batch: Callable[[int, int, int], None] | None = None) -> IndexReport:
+    """Embed and store every chunk not already in the collection.
+
+    on_batch(batch number, batches, chunks embedded so far) reports progress (the admin page).
+    """
     report = IndexReport(total=len(chunks))
     report.removed_stale = remove_stale(collection, chunks)
 
@@ -149,6 +154,8 @@ def index_chunks(chunks: list[Chunk], collection: Collection) -> IndexReport:
         )
         report.embedded += len(batch)
         logger.info("Batch %d/%d stored (%d/%d new chunks)", n, len(batches), report.embedded, len(todo))
+        if on_batch:
+            on_batch(n, len(batches), report.embedded)
 
         # Stay under the per-minute limit: one batch per RATE_WINDOW_SECONDS.
         if n < len(batches):

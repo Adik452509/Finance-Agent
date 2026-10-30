@@ -96,6 +96,14 @@ class Settings(BaseSettings):
     daily_question_quota: int = 10  # per user per day: the shared Groq budget is the real limit
     admin_emails: str = ""          # comma-separated: these users get the admin page and no quota
 
+    # --- Backend API (Phase 6.3) ---------------------------------------------
+    # The backend trusts the X-User-Email header, so only the frontend may call it: it listens on
+    # localhost, and every request must carry this shared secret. Required in production.
+    app_env: Literal["dev", "production"] = "dev"
+    internal_api_token: str | None = None
+    max_parallel_questions: int = 2   # Groq allows 8k tokens/minute: more parallel runs just hit 429s
+    question_timeout_seconds: int = 300
+
     # --- Paths -------------------------------------------------------------
     project_root: Path = PROJECT_ROOT
     data_dir: Path = PROJECT_ROOT / "data"
@@ -134,6 +142,8 @@ class Settings(BaseSettings):
             raise ValueError("EMBED_CHARS_PER_MINUTE must exceed CHUNK_SIZE + 500.")
         if self.filings_store == "postgres" and not (self.database_url or "").startswith(("postgresql", "postgres")):
             raise ValueError("FILINGS_STORE=postgres needs DATABASE_URL to be a Postgres URL.")
+        if self.app_env == "production" and len(self.internal_api_token or "") < 32:
+            raise ValueError("APP_ENV=production needs INTERNAL_API_TOKEN (32+ random characters).")
         return self
 
     # --- Derived values ----------------------------------------------------

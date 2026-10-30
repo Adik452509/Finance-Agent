@@ -304,3 +304,7 @@ def update_job(db: Session, job_id: str, *, progress: str | None = None, status:
 
 def get_job(db: Session, job_id: str) -> Job | None:
     return db.get(Job, job_id)
+
+
+def list_jobs(db: Session, limit: int = 20) -> list[Job]:
+    return list(db.scalars(select(Job).order_by(Job.created_at.desc()).limit(limit)))

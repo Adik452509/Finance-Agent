@@ -9,7 +9,8 @@
 
 Only the most useful pages are embedded (--max-chunks, default 250), because the free
 Gemini tier embeds ~1,000 chunks a day. Re-running resumes; a newer report replaces the
-older one. Restart the app afterwards so the agents see the new company.
+older one. Restart the app afterwards so the agents see the new company. The same work
+runs in the deployed app as an admin job (src/ingestion/acquire.add_company).
 """
 
 import argparse
@@ -20,34 +21,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from config.settings import settings  # noqa: E402
-from src.ingestion.acquire import (  # noqa: E402
-    DEFAULT_MAX_CHUNKS, AcquireError, edinet_annual_report, pdf_from_url, prepare, register, registered,
-    sec_annual_report,
-)
-from src.ingestion.chunker import chunk_pages  # noqa: E402
-from src.ingestion.indexer import get_collection, index_chunks  # noqa: E402
-from src.ingestion.loader import DocumentMeta, load_document  # noqa: E402
+from src.ingestion.acquire import DEFAULT_MAX_CHUNKS, AcquireError, add_company  # noqa: E402
 
 warnings.filterwarnings("ignore", message=".*Timestamp.utcnow.*")
-
-
-def fetch(args) -> dict:
-    if args.pdf_url:
-        missing = [n for n in ("company", "market", "doc_type", "fiscal_year_end", "currency") if not getattr(args, n)]
-        if missing:
-            raise AcquireError("--pdf-url also needs: " + ", ".join("--" + m.replace("_", "-") for m in missing))
-        return pdf_from_url(args.pdf_url, {"company": args.company, "ticker": args.ticker.upper(),
-                                           "market": args.market, "doc_type": args.doc_type,
-                                           "fiscal_year_end": args.fiscal_year_end, "currency": args.currency,
-                                           "reporting_unit": args.unit or ""})
-    if args.ticker.upper().endswith(".T"):
-        return edinet_annual_report(args.ticker)
-    if "." in args.ticker:
-        raise AcquireError(f"{args.ticker} is not US- or Tokyo-listed: download its annual report yourself and "
-                           "pass the link with --pdf-url (plus --company, --market, --doc-type, --fiscal-year-end, "
-                           "--currency).")
-    return sec_annual_report(args.ticker)
 
 
 def main() -> int:
@@ -61,43 +37,31 @@ def main() -> int:
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-7s %(message)s", datefmt="%H:%M:%S")
 
-    existing = registered(args.ticker)
-    if any(not e.get("source") for e in existing) and not args.force:
-        print(f"{args.ticker} already has a report added by hand ({existing[0]['file']}). Use --force to replace it.")
-        return 1
+    pdf = None
+    if args.pdf_url:
+        missing = [n for n in ("company", "market", "doc_type", "fiscal_year_end", "currency") if not getattr(args, n)]
+        if missing:
+            print("--pdf-url also needs: " + ", ".join("--" + m.replace("_", "-") for m in missing))
+            return 1
+        pdf = {"url": args.pdf_url, "company": args.company, "market": args.market, "doc_type": args.doc_type,
+               "fiscal_year_end": args.fiscal_year_end, "currency": args.currency, "reporting_unit": args.unit or ""}
     try:
-        entry = fetch(args)
-        entry, stats = prepare(entry, args.max_chunks)
+        result = add_company(args.ticker, pdf=pdf, max_chunks=args.max_chunks, force=args.force,
+                             dry_run=args.dry_run, progress=lambda message: print(f"  {message}", flush=True))
     except AcquireError as e:
         print(f"Could not add {args.ticker}: {e}")
         return 1
 
-    print(f"\n{entry['company']} ({entry['ticker']}) {entry['doc_type']} for the fiscal year ended "
-          f"{entry['fiscal_year_end']}, filed {entry['filed']}")
-    print(f"  file: {entry['file']}   unit: {entry['reporting_unit']}")
-    print(f"  pages: {stats['pages_chosen']} of {stats['pages_total']} chosen ({entry['pages']})")
-    print(f"  chunks to embed: {stats['chunks']} (~{stats['minutes']} min on the free tier, one batch a minute)")
-    if any(e.get("filed") == entry["filed"] and e.get("file") == entry["file"] for e in existing):
-        print("  already registered: indexing resumes / checks what is missing")
+    entry = result["entry"]
+    print(f"\n  file: {entry['file']}   unit: {entry['reporting_unit']}   pages: {entry['pages']}")
     if args.dry_run:
-        print("\n--dry-run: documents.json and the index were not changed.")
+        print("\n--dry-run: the registry and the index were not changed.")
         return 0
-
-    replaced = register(entry)
-    collection = get_collection()
-    for old in replaced:
-        if old["file"] != entry["file"]:
-            collection.delete(where={"file": old["file"]})
-            print(f"  replaced older report {old['file']}")
-            if old.get("source"):  # only files this script downloaded are deleted
-                (settings.raw_dir / old["file"]).unlink(missing_ok=True)
-
-    meta = DocumentMeta(**entry)
-    report = index_chunks(chunk_pages(load_document(meta)), collection)
-    print(f"\nEmbedded now: {report.embedded}   already indexed: {report.already_indexed}   "
-          f"in collection: {collection.count()}")
-    if not report.complete:
-        print(f"STOPPED - {report.stopped_reason}\nRe-run the same command to continue.")
+    for old in result.get("replaced", []):
+        print(f"  replaced older report {old}")
+    print(f"\nEmbedded now: {result['embedded']}   already indexed: {result['already_indexed']}")
+    if not result["complete"]:
+        print(f"STOPPED - {result['stopped_reason']}\nRe-run the same command to continue.")
         return 1
     print("COMPLETE. Restart the app (or re-run your script) so the agents see the new report.")
     return 0
