@@ -459,6 +459,36 @@ def test_a_step_whose_server_is_down_still_gets_real_tools():
     assert out["tool_calls"][0]["ok"] is True
 
 
+def test_round_bracket_citations_are_still_checked():
+    # Seen live: "(RELIANCE.NS p130)" made every check skip the line, and O2C's 6,05,006 was
+    # published as the consolidated total. Now the segment-column check sees it.
+    from src.agents.nodes import fact_problems
+
+    line = "- Revenue from Operations (2024-25, consolidated): 6,05,006 INR crore (RELIANCE.NS p130)"
+    assert any("last ('Total') column" in m for _, m in fact_problems(line, {"RELIANCE.NS p130": SEGMENT_PAGE}))
+
+
+def test_an_untagged_filings_figure_is_a_problem():
+    from src.agents.nodes import correction_brief, untagged_problems
+
+    facts = "- Revenue (2024-25, consolidated): 9,80,136 INR crore\n- NOT FOUND: Retail revenue"
+    problems = untagged_problems(facts, "filings")
+    assert [i for i, _ in problems] == [0]
+    assert "SQUARE brackets" in correction_brief(problems)
+    assert untagged_problems(facts, "market") == []  # market figures cite (Yahoo Finance, ...)
+    assert untagged_problems("- Revenue: 9,80,136 crore [RELIANCE.NS p100]", "filings") == []
+
+
+def test_an_empty_reply_after_a_search_is_retried_once():
+    # Seen live (gpt-oss-20b): the right search, then an empty reply -> "NOT FOUND" for a figure on the page.
+    model = scripted(tool_call("search_filings", {"query": "revenue"}), AIMessage(content=""),
+                     tool_call("search_filings", {"query": "revenue"}, call_id="c2"), AIMessage(content=FACTS))
+    out = run(make_researcher(model, TOOLS), plan_state())
+    assert out["findings"][0]["facts"] == FACTS
+    assert any("returned no notes (retrying)" in w for w in out["warnings"])
+    assert "ended without any fact notes" in model.seen[2][1].content
+
+
 def test_each_step_only_gets_its_sources_tools():
     steps = [{"id": 1, "kind": "market", "ticker": "MSFT", "goal": "Microsoft revenue"}]
     model = scripted(tool_call("search_filings", {"query": "revenue"}), AIMessage(content="- NOT FOUND: revenue"))

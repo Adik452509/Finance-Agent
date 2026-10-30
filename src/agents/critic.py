@@ -30,11 +30,11 @@ from src.rag.qa import _message_text
 MAX_ISSUES = 5
 
 LABEL_RE = re.compile(r"\[([^\[\]\n]{1,120})\](?!\()")
-SOURCE_TAG_RE = re.compile(r"\[[A-Z0-9.^-]+ p\d+\]")
+SOURCE_TAG_RE = re.compile(r"[\[(][A-Z0-9.^-]+ p\d+[\])]")  # [TICKER pN] or (TICKER pN)
 TICKER_RE = re.compile(r"\b\d{3,4}\.[A-Z]{1,3}\b|\b[A-Z]{2,10}\.[A-Z]{2}\b")   # 7203.T, 0700.HK, RELIANCE.NS
 TIME_RE = re.compile(r"\b\d{1,2}:\d{2}(?::\d{2})?\b")                        # 20:17:49 in news dates
 NUMBER_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
-CITED_RE = re.compile(r"\[[A-Z0-9.^-]+ p\d+\]|[(\[](?:Yahoo Finance|SEC EDGAR|EDINET)|\(calculated|\(<?[a-z0-9.-]+\.[a-z]{2,}>?,",
+CITED_RE = re.compile(r"[\[(][A-Z0-9.^-]+ p\d+[\])]|[(\[](?:Yahoo Finance|SEC EDGAR|EDINET)|\(calculated|\(<?[a-z0-9.-]+\.[a-z]{2,}>?,",
                       re.I)
 UNVERIFIED = "UNVERIFIED"
 PLACEHOLDER_LABELS = {"source", "sources", "citation", "citations", "ref", "reference", "cite"}

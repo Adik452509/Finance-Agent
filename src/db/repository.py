@@ -92,6 +92,14 @@ def delete_conversation(db: Session, user_id: str, conversation_id: str) -> bool
 # --- messages ---------------------------------------------------------------------------------
 
 
+def short_title(text: str) -> str:
+    """A chat title from the first question: whole words, '…' when cut."""
+    text = " ".join(text.split())
+    if len(text) <= TITLE_CHARS:
+        return text or "New chat"
+    return text[:TITLE_CHARS - 1].rsplit(" ", 1)[0].rstrip(",;:") + "…"
+
+
 def add_message(db: Session, conversation: Conversation, role: str, content: str, **fields) -> Message:
     """Append a message; the first question also becomes the chat's title."""
     if role not in ("user", "assistant"):
@@ -100,7 +108,7 @@ def add_message(db: Session, conversation: Conversation, role: str, content: str
     db.add(message)
     conversation.updated_at = utcnow()
     if role == "user" and conversation.title == "New chat":
-        conversation.title = " ".join(content.split())[:TITLE_CHARS] or "New chat"
+        conversation.title = short_title(content)
     db.flush()
     return message
 

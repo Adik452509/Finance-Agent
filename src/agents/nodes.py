@@ -110,7 +110,9 @@ def reroute_unindexed(plan: dict, known: set[str]) -> tuple[dict, list[str]]:
     return plan, notes
 
 
-SOURCE_TAG_RE = re.compile(r"\[([A-Z0-9.^-]+ p\d+)\]")
+# [RELIANCE.NS p130] - or (RELIANCE.NS p130): seen live, a researcher wrote round brackets, every
+# check below skipped those lines as "uncited", and a segment column was published as the total.
+SOURCE_TAG_RE = re.compile(r"[\[(]([A-Z0-9.^-]+ p\d+)[\])]")
 NUMBER_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
 
 
@@ -184,6 +186,20 @@ def company_problems(facts: str, ticker: str | None) -> list[tuple[int, str]]:
     return problems
 
 
+def untagged_problems(facts: str, kind: str) -> list[tuple[int, str]]:
+    """Filings figures with no page tag: no check can see them, so they may not pass unchecked."""
+    if kind != "filings":
+        return []
+    problems = []
+    for i, line in enumerate(facts.splitlines()):
+        stripped = line.lstrip("- ").strip()
+        if (stripped and not stripped.startswith(("NOT FOUND", "UNVERIFIED")) and _big_numbers(line)
+                and not SOURCE_TAG_RE.search(line)):
+            problems.append((i, "researcher: this figure has no [TICKER pN] source tag, so it can't be checked "
+                                "against its page"))
+    return problems
+
+
 def check_facts_against_sources(facts: str, passages: dict[str, str]) -> list[str]:
     return [message for _, message in fact_problems(facts, passages)]
 
@@ -245,6 +261,10 @@ async def source_check(verifier: BaseChatModel, facts: str,
     return problems, tokens, []
 
 
+EMPTY_NOTES_BRIEF = ("\n\nYour previous attempt ended without any fact notes. Search for the figures this step "
+                     "names, then reply with the fact notes in the required format (or NOT FOUND lines).")
+
+
 def correction_brief(problems: list[tuple[int, str]]) -> str:
     """Tell the retry WHAT was wrong and WHERE to look instead.
 
@@ -260,6 +280,8 @@ def correction_brief(problems: list[tuple[int, str]]) -> str:
                      "CONSOLIDATED financial statements.")
     if any("not in its cited source" in m for _, m in problems):
         hints.append("Copy each figure exactly as the cited passage shows it, and cite the passage it came from.")
+    if any("no [TICKER pN] source tag" in m for _, m in problems):
+        hints.append("Cite every figure with its passage's source_id in SQUARE brackets, e.g. [RELIANCE.NS p100].")
     if any("another company's filing" in m for _, m in problems):
         hints.append("Only use passages from this step's company. If search_filings has no annual report for it, "
                      "write NOT FOUND for the filings figures - never use another company's figures.")
@@ -392,9 +414,10 @@ def make_researcher(llm: BaseChatModel, tools: list[BaseTool], max_rounds: int =
             facts, problems = "", []
             # Attempt 1, then (only if the source check flags the notes) one corrected attempt.
             # Seen in the eval: the checks caught both wrong answers, but nothing acted on them.
+            retry_brief = ""
             for attempt in (1, 2):
                 try:
-                    result = await run_step(brief if attempt == 1 else brief + correction_brief(problems), step)
+                    result = await run_step(brief if attempt == 1 else brief + retry_brief, step)
                 except Exception as e:  # one failed step must not take down the whole report
                     reason = describe_error(e)
                     warnings.append(f"researcher step {step['id']} failed: {reason}")
@@ -411,8 +434,16 @@ def make_researcher(llm: BaseChatModel, tools: list[BaseTool], max_rounds: int =
                     warnings.append(f"researcher step {step['id']}: no tool was used, so its notes are unverified")
                 if result.hit_cap:
                     warnings.append(f"researcher step {step['id']}: stopped at the {max_rounds}-round tool limit")
+                if not result.text.strip() and attempt == 1 and result.calls:
+                    # Seen live (gpt-oss-20b): the right search, then an empty reply - a sure "NOT FOUND"
+                    # for a figure that was right there. One more go, like the analyst's empty-text fallback.
+                    warnings.append(f"researcher step {step['id']}: returned no notes (retrying)")
+                    retry_brief = EMPTY_NOTES_BRIEF
+                    problems = []
+                    continue
                 facts = result.text or "- NOT FOUND: the researcher returned no notes"
-                problems = company_problems(facts, step.get("ticker")) + fact_problems(facts, passages)
+                problems = (company_problems(facts, step.get("ticker")) + untagged_problems(facts, step["kind"])
+                            + fact_problems(facts, passages))
                 if not problems and verifier is not None:  # code checks first: free, and they catch the obvious
                     problems, used, notes = await source_check(verifier, facts, passages)
                     verifier_tokens += used
@@ -423,6 +454,7 @@ def make_researcher(llm: BaseChatModel, tools: list[BaseTool], max_rounds: int =
                     break
                 if attempt == 1:
                     warnings += [f"{m} (retrying step {step['id']})" for _, m in problems]
+                    retry_brief = correction_brief(problems)
 
             if problems:  # still flagged after the retry: quarantine those lines
                 facts = mark_unverified(facts, problems)

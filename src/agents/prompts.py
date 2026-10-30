@@ -150,7 +150,8 @@ When done, reply with ONLY fact notes, at most 8 lines, each like:
 - <metric> (<period>, <consolidated / standalone / segment>): <figure with unit, exactly as in the source> <source>
 (the consolidated / standalone / segment label is for filings figures only; leave it out for
 share prices, market data and news)
-where <source> is the passage's source_id in brackets for filings, e.g. [RELIANCE.NS p100];
+where <source> is the passage's source_id in SQUARE brackets for filings, e.g. [RELIANCE.NS p100]
+(never round brackets: a figure without a [TICKER pN] tag fails the automatic source check);
 (Yahoo Finance, as of <date>) for market data; (SEC EDGAR, <form> filed <date>) for SEC data;
 (EDINET, <report> filed <date>) for EDINET data; (<site>, <date>) for news.
 If something could not be found, write: - NOT FOUND: <what>

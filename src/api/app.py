@@ -77,6 +77,18 @@ def admin_in(db: Session, who: Caller):
 # --- answering --------------------------------------------------------------------------------
 
 
+def cacheable(final: dict) -> bool:
+    """Only a complete, checked answer is reused.
+
+    Not a doubtful one (critic fail), and not one with gaps: seen live, an honest "not found"
+    (the researcher's reply came back empty) passed the critic and would have been served for 7 days.
+    """
+    if (final.get("critique") or {}).get("verdict") != "pass":
+        return False
+    notes = " ".join(f.get("facts", "") for f in final.get("findings") or [])
+    return "NOT FOUND" not in notes and "UNVERIFIED" not in notes
+
+
 def _progress(agent: str, label: str, text: str) -> dict:
     return {"type": "progress", "agent": agent, "label": label, "text": text, "detail": [], "warnings": []}
 
@@ -118,7 +130,7 @@ async def produce_answer(app: FastAPI, user_id: str, conversation_id: str, quest
             record = answer_record(final, extra_usage={"memory": memory_tokens} if memory_tokens else None)
             if not record["content"]:
                 raise RuntimeError("the team produced no report")
-            if (final.get("critique") or {}).get("verdict") == "pass":  # never reuse a doubtful answer
+            if cacheable(final):
                 with session_scope(state.sessions) as db:
                     repo.cache_put(db, standalone, {k: record[k] for k in ("content", "citations", "trace")},
                                    cache_ttl(standalone))

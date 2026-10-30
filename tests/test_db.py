@@ -71,7 +71,8 @@ def test_first_question_becomes_the_title(db, two_users):
     chat = repo.create_conversation(db, alice.id)
     repo.add_message(db, chat, "user", "What was   Microsoft's Intelligent Cloud revenue in fiscal 2026 and its share?")
     repo.add_message(db, chat, "user", "and in 2025?")
-    assert chat.title == "What was Microsoft's Intelligent Cloud revenue in fiscal 2026"[:repo.TITLE_CHARS]
+    assert chat.title == "What was Microsoft's Intelligent Cloud revenue in fiscal…"  # whole words, then '…'
+    assert len(chat.title) <= repo.TITLE_CHARS
     assert repo.rename_conversation(db, alice.id, chat.id, "  MSFT cloud  ") and chat.title == "MSFT cloud"
 
 

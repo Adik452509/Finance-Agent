@@ -254,6 +254,16 @@ def test_a_doubtful_answer_is_never_cached(tmp_path, monkeypatch):
         assert len(client.graphs[0].researched) == 2
 
 
+def test_answers_with_gaps_are_not_cached():
+    from src.api.app import cacheable
+
+    passed = {"critique": {"verdict": "pass"}}
+    assert cacheable({**passed, "findings": [{"facts": "- Revenue: 1,234 [X p1]"}]})
+    assert not cacheable({**passed, "findings": [{"facts": "- NOT FOUND: the researcher returned no notes"}]})
+    assert not cacheable({**passed, "findings": [{"facts": "- UNVERIFIED (failed the source check): x"}]})
+    assert not cacheable({"critique": {"verdict": "fail"}, "findings": []})
+
+
 # --- feedback --------------------------------------------------------------------------------------
 
 
