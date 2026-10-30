@@ -1,0 +1,63 @@
+# Research Desk theme (Phase 6.5). Colors follow the dataviz reference palette: one system sans
+# for everything, ink-colored text, a navy finance sidebar, and status colors reserved for status.
+# Light and dark are each designed (not an automatic flip); Streamlit's menu switches between them.
+
+[server]
+headless = true
+
+[browser]
+gatherUsageStats = false
+
+[client]
+toolbarMode = "minimal"
+
+[theme]
+font = "system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif"
+headingFont = "system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif"
+headingFontWeights = [700, 650, 600, 600, 600, 600]
+baseRadius = "0.6rem"
+showWidgetBorder = true
+
+[theme.light]
+primaryColor = "#1c5cab"
+backgroundColor = "#f9f9f7"
+secondaryBackgroundColor = "#f0efec"
+textColor = "#0b0b0b"
+linkColor = "#1c5cab"
+borderColor = "#e1e0d9"
+dataframeBorderColor = "#e1e0d9"
+blueColor = "#2a78d6"
+greenColor = "#006300"
+redColor = "#d03b3b"
+orangeColor = "#c2501f"
+chartCategoricalColors = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"]
+
+[theme.light.sidebar]
+backgroundColor = "#0f1b2d"
+secondaryBackgroundColor = "#18263b"
+textColor = "#e8edf5"
+primaryColor = "#3987e5"
+borderColor = "#24344d"
+linkColor = "#86b6ef"
+
+[theme.dark]
+primaryColor = "#3987e5"
+backgroundColor = "#0f1115"
+secondaryBackgroundColor = "#1a1a19"
+textColor = "#f0efec"
+linkColor = "#86b6ef"
+borderColor = "#2c2c2a"
+dataframeBorderColor = "#2c2c2a"
+blueColor = "#3987e5"
+greenColor = "#0ca30c"
+redColor = "#e66767"
+orangeColor = "#ec835a"
+chartCategoricalColors = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9", "#e66767"]
+
+[theme.dark.sidebar]
+backgroundColor = "#0a0f18"
+secondaryBackgroundColor = "#141c2a"
+textColor = "#e8edf5"
+primaryColor = "#3987e5"
+borderColor = "#1f2a3c"
+linkColor = "#86b6ef"

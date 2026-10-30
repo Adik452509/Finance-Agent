@@ -104,6 +104,12 @@ class Settings(BaseSettings):
     max_parallel_questions: int = 2   # Groq allows 8k tokens/minute: more parallel runs just hit 429s
     question_timeout_seconds: int = 300
 
+    # --- Frontend (Phase 6.5) ------------------------------------------------
+    api_base_url: str = "http://127.0.0.1:8000"
+    # Until Google login (6.6) the local app acts as this user. Ignored once login is on.
+    dev_user_email: str = "dev@example.com"
+    dev_user_name: str = "Local developer"
+
     # --- Paths -------------------------------------------------------------
     project_root: Path = PROJECT_ROOT
     data_dir: Path = PROJECT_ROOT / "data"
