@@ -11,6 +11,8 @@ short_description: Financial research agent with cited, source-checked answers
 
 # Research Desk — a financial research agent
 
+[![tests](https://github.com/Adik452509/Finance-Agent/actions/workflows/tests.yml/badge.svg)](https://github.com/Adik452509/Finance-Agent/actions/workflows/tests.yml)
+
 Ask a question about a listed company — *"What share of Microsoft's revenue came from Intelligent
 Cloud in fiscal 2026?"* — and a team of AI agents plans the research, reads annual reports and
 official filings, calculates with a real calculator, and **checks every figure against its source

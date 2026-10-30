@@ -69,7 +69,9 @@ def test_connection_uses_this_venv_python_and_project_root():
     assert conn["transport"] == "stdio"
     assert conn["command"] == sys.executable
     assert conn["args"] == ["-m", "tests.mcp_fixture_echo"]
-    assert conn["cwd"].endswith("Finance agent")
+    from config.settings import settings
+
+    assert conn["cwd"] == str(settings.project_root)  # not a folder name: CI checks out to "Finance-Agent"
 
 
 # --- live discovery (real subprocesses over stdio) ---------------------------------------------

@@ -118,7 +118,10 @@ def load_registry(path: Path | None = None) -> list[DocumentMeta]:
 
         # Guardrail: only bare file names, so a registry entry can never point
         # outside data/raw (e.g. "../../.env").
-        if Path(entry["file"]).name != entry["file"]:
+        # Both separators and "..", on every OS: on Linux a backslash is an ordinary character, so
+        # "..\.env" passed the Path check there (caught by running the tests on Linux for CI).
+        name = entry["file"]
+        if Path(name).name != name or "\\" in name or "/" in name or ".." in name:
             raise ValueError(f"{path.name} entry #{i + 1}: 'file' must be a plain file name, got {entry['file']!r}")
 
         if entry["file"] in seen:
