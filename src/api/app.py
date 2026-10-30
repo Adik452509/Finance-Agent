@@ -30,6 +30,8 @@ from src.api.team import Team
 from src.api.worker import job_worker
 from src.db import repository as repo
 from src.db.session import session_scope
+from src.memory.cache_policy import cache_ttl
+from src.memory.followup import standalone_question
 
 logger = logging.getLogger(__name__)
 
@@ -75,24 +77,51 @@ def admin_in(db: Session, who: Caller):
 # --- answering --------------------------------------------------------------------------------
 
 
-async def produce_answer(app: FastAPI, user_id: str, conversation_id: str, question: str, emit) -> None:
-    """Background task: research the question, save the answer, then close the event stream."""
+def _progress(agent: str, label: str, text: str) -> dict:
+    return {"type": "progress", "agent": agent, "label": label, "text": text, "detail": [], "warnings": []}
+
+
+async def produce_answer(app: FastAPI, user_id: str, conversation_id: str, question_id: str, question: str,
+                         turns: list[tuple[str, str]], emit) -> None:
+    """Background task: understand, answer (from cache or research), save, then close the stream."""
     state = app.state
-    record, status = None, "ok"
+    record, status, counts = None, "ok", True
     try:
-        if state.slots.locked():
-            emit({"type": "queued", "text": "Another question is being researched; yours is next."})
-        async with state.slots:  # Groq's per-minute limit: only a few runs at a time
-            if not await state.team.wait_ready(timeout=90):
-                raise RuntimeError(state.team.error or "the research team is not ready")
-            state.active += 1
-            try:
-                final = await run_question(state.team, question, emit, settings.question_timeout_seconds)
-            finally:
-                state.active -= 1
-        record = answer_record(final)
-        if not record["content"]:
-            raise RuntimeError("the team produced no report")
+        # 1. A follow-up ("and in 2024?") becomes a standalone question, using the chat history.
+        standalone, memory_tokens, warning = await standalone_question(state.rewriter, question, turns)
+        if standalone != question:
+            emit(_progress("memory", "Memory", f"Understood as: {standalone}"))
+            with session_scope(state.sessions) as db:
+                repo.set_standalone_question(db, question_id, standalone)
+        if warning:
+            emit(_progress("memory", "Memory", warning))
+
+        # 2. The same question answered recently: reuse it (no tokens, no quota).
+        with session_scope(state.sessions) as db:
+            cached = repo.cache_get(db, standalone)
+        if cached is not None:
+            record = {**cached, "tokens": 0, "usage": {}, "from_cache": True}
+            counts = False
+            emit(_progress("cache", "Cache", "Answered from a recent identical question (no new research needed)"))
+        else:
+            # 3. Research it.
+            if state.slots.locked():
+                emit({"type": "queued", "text": "Another question is being researched; yours is next."})
+            async with state.slots:  # Groq's per-minute limit: only a few runs at a time
+                if not await state.team.wait_ready(timeout=90):
+                    raise RuntimeError(state.team.error or "the research team is not ready")
+                state.active += 1
+                try:
+                    final = await run_question(state.team, standalone, emit, settings.question_timeout_seconds)
+                finally:
+                    state.active -= 1
+            record = answer_record(final, extra_usage={"memory": memory_tokens} if memory_tokens else None)
+            if not record["content"]:
+                raise RuntimeError("the team produced no report")
+            if (final.get("critique") or {}).get("verdict") == "pass":  # never reuse a doubtful answer
+                with session_scope(state.sessions) as db:
+                    repo.cache_put(db, standalone, {k: record[k] for k in ("content", "citations", "trace")},
+                                   cache_ttl(standalone))
     except Exception as e:
         logger.exception("Question failed")
         record, status = {"content": friendly_error(e), "trace": {"error": f"{type(e).__name__}: {str(e)[:300]}"}}, "error"
@@ -102,8 +131,8 @@ async def produce_answer(app: FastAPI, user_id: str, conversation_id: str, quest
             conversation = repo.get_conversation(db, user_id, conversation_id)
             if conversation is not None:  # it may have been deleted while we worked
                 message = repo.add_message(db, conversation, "assistant", status=status, **record)
-                if status == "ok":
-                    repo.record_question(db, user_id, record.get("tokens", 0))  # failures cost no quota
+                if status == "ok" and counts:
+                    repo.record_question(db, user_id, record.get("tokens", 0))  # failures and cache hits are free
                 emit({"type": "answer", "message": schemas.MessageOut.model_validate(message).model_dump(mode="json")})
     except Exception:
         logger.exception("Could not save the answer")
@@ -127,12 +156,19 @@ def sse(event: dict) -> str:
 # --- the app ----------------------------------------------------------------------------------
 
 
+def default_rewriter():
+    from config.llm import get_chat_model
+
+    return get_chat_model("default")  # the small model: a rewrite is a ~1k-token job
+
+
 def create_app(team: Team | None = None, sessions: sessionmaker[Session] | None = None,
-               start_worker: bool = True) -> FastAPI:
+               start_worker: bool = True, rewriter=None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         state = app.state
         state.team = team or Team()
+        state.rewriter = rewriter or default_rewriter
         if sessions is not None:
             state.sessions = sessions
         else:
@@ -231,11 +267,13 @@ def create_app(team: Team | None = None, sessions: sessionmaker[Session] | None 
                 raise HTTPException(429, f"Daily limit of {repo.quota_for(user)} questions reached. "
                                          "It resets at midnight UTC.")
             question = " ".join(body.question.split())
+            turns = repo.recent_turns(db, conversation_id)  # read BEFORE saving: the question is not its own context
             saved = repo.add_message(db, conversation_, "user", question)
             user_id, question_message = user.id, schemas.MessageOut.model_validate(saved).model_dump(mode="json")
 
         queue: asyncio.Queue = asyncio.Queue()
-        task = asyncio.create_task(produce_answer(app_, user_id, conversation_id, question, queue.put_nowait))
+        task = asyncio.create_task(produce_answer(app_, user_id, conversation_id, saved.id, question, turns,
+                                                  queue.put_nowait))
         app_.state.tasks.add(task)  # keep a reference: the task outlives this request if the client leaves
         task.add_done_callback(app_.state.tasks.discard)
 

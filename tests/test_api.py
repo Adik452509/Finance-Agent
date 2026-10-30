@@ -40,27 +40,42 @@ class FakeToolbox:
 
 
 class FakeGraph:
-    def __init__(self, on_event, fail=None, delay=0.0):
-        self.on_event, self.fail, self.delay = on_event, fail, delay
+    def __init__(self, on_event, fail=None, delay=0.0, verdict="pass"):
+        self.on_event, self.fail, self.delay, self.verdict = on_event, fail, delay, verdict
+        self.researched: list[str] = []  # every question the "team" was asked to research
 
     async def astream(self, inputs, stream_mode):
+        self.researched.append(inputs["question"])
         yield "updates", {"planner": {"plan": FINAL["plan"], "warnings": []}}
         self.on_event("call", {"agent": "researcher", "name": "search_filings", "args": {"query": "revenue"}})
         self.on_event("result", {"agent": "researcher", "name": "search_filings", "ok": True, "seconds": 0.4})
         await asyncio.sleep(self.delay)
         if self.fail:
             raise self.fail
+        critique = {"verdict": self.verdict, "issues": [] if self.verdict == "pass" else [{"claim": "c", "problem": "p"}]}
         yield "updates", {"researcher": {"findings": FINAL["findings"]}}
-        yield "updates", {"critic": {"critique": FINAL["critique"], "critic_rounds": 1}}
-        yield "values", FINAL
+        yield "updates", {"critic": {"critique": critique, "critic_rounds": 1}}
+        yield "values", {**FINAL, "critique": critique}
 
 
-def make_client(tmp_path, fail=None, delay=0.0):
+def no_rewrite_expected():
+    raise AssertionError("a first question must not build the rewrite model")
+
+
+def make_client(tmp_path, fail=None, delay=0.0, verdict="pass", rewriter=no_rewrite_expected):
     engine = make_engine(f"sqlite:///{(tmp_path / 'api.db').as_posix()}")
     Base.metadata.create_all(engine)
     sessions = sessionmaker(bind=engine, expire_on_commit=False)
-    team = Team(toolbox_factory=FakeToolbox, graph_factory=lambda tools, on_event: FakeGraph(on_event, fail, delay))
-    return TestClient(api.create_app(team=team, sessions=sessions, start_worker=False)), sessions
+    graphs: list[FakeGraph] = []
+
+    def graph_factory(tools, on_event):
+        graphs.append(FakeGraph(on_event, fail, delay, verdict))
+        return graphs[-1]
+
+    team = Team(toolbox_factory=FakeToolbox, graph_factory=graph_factory)
+    client = TestClient(api.create_app(team=team, sessions=sessions, start_worker=False, rewriter=rewriter))
+    client.graphs = graphs
+    return client, sessions
 
 
 @pytest.fixture
@@ -187,6 +202,56 @@ def test_the_answer_is_saved_even_if_the_browser_disconnects(tmp_path, monkeypat
             time.sleep(0.1)
         roles = [m["role"] for m in slow.get(f"/conversations/{chat['id']}", headers=ALICE).json()["messages"]]
         assert roles == ["user", "assistant"]
+
+
+# --- follow-ups and the answer cache (6.4) -------------------------------------------------------------
+
+
+def test_a_follow_up_is_rewritten_with_the_chat_history(tmp_path, monkeypatch):
+    from langchain_core.messages import AIMessage
+    from tests.conftest import scripted
+
+    monkeypatch.setattr(api.settings, "internal_api_token", None)
+    model = scripted(AIMessage(content="What was Apple's net income in fiscal 2024?",
+                               usage_metadata={"input_tokens": 600, "output_tokens": 20, "total_tokens": 620}))
+    client, sessions = make_client(tmp_path, rewriter=lambda: model)
+    with client:
+        chat = client.post("/conversations", json={}, headers=ALICE).json()
+        ask(client, chat["id"], question="What was Apple's net income in fiscal 2025?")
+        _, events = ask(client, chat["id"], question="and in 2024?")
+        assert any(e.get("agent") == "memory" and "fiscal 2024" in e["text"] for e in events)
+        assert client.graphs[0].researched == ["What was Apple's net income in fiscal 2025?",
+                                               "What was Apple's net income in fiscal 2024?"]
+        history = model.seen[0][1].content
+        assert "User: What was Apple's net income in fiscal 2025?" in history and "Latest message: and in 2024?" in history
+        assert "This is an automated research summary" not in history  # the disclaimer is noise
+        messages = client.get(f"/conversations/{chat['id']}", headers=ALICE).json()["messages"]
+        assert messages[-1]["usage"]["memory"] == 620
+        with sessions() as db:
+            follow_up = db.query(Message).filter_by(content="and in 2024?").one()
+            assert follow_up.standalone_question == "What was Apple's net income in fiscal 2024?"
+
+
+def test_the_same_question_is_answered_from_the_cache_for_free(client):
+    first = client.post("/conversations", json={}, headers=ALICE).json()
+    ask(client, first["id"], question="What was Apple's net income in fiscal 2025?")
+    other = client.post("/conversations", json={}, headers=BOB).json()  # another user, other words
+    _, events = ask(client, other["id"], question="  what was Apple's net income in fiscal 2025 ", headers=BOB)
+    answer = events[-1]["message"]
+    assert answer["from_cache"] and answer["tokens"] == 0 and answer["content"] == FINAL["report"]
+    assert any(e.get("agent") == "cache" for e in events)
+    assert len(client.graphs[0].researched) == 1                              # researched once only
+    assert client.get("/me", headers=BOB).json()["questions_left_today"] == 10  # a cache hit costs no quota
+
+
+def test_a_doubtful_answer_is_never_cached(tmp_path, monkeypatch):
+    monkeypatch.setattr(api.settings, "internal_api_token", None)
+    client, _ = make_client(tmp_path, verdict="fail")
+    with client:
+        for _ in range(2):
+            chat = client.post("/conversations", json={}, headers=ALICE).json()
+            ask(client, chat["id"], question="What was Apple's net income in fiscal 2025?")
+        assert len(client.graphs[0].researched) == 2
 
 
 # --- feedback --------------------------------------------------------------------------------------

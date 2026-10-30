@@ -156,6 +156,15 @@ where <source> is the passage's source_id in brackets for filings, e.g. [RELIANC
 If something could not be found, write: - NOT FOUND: <what>
 """
 
+REWRITE_PROMPT = """You turn the user's latest message in a financial research chat into ONE standalone question.
+
+Use the earlier conversation only to fill in what the latest message leaves out: the company (and
+ticker), the metric, the period. Keep everything the user did say, including new periods or
+companies. If the message is already a complete question, return it unchanged. Never answer it,
+never add figures, never add a company the user did not mention or refer to.
+
+Reply with ONLY the question, on one line."""
+
 SOURCE_CHECK_PROMPT = """You verify a researcher's fact notes against the source page text they cite.
 For EACH numbered fact, decide if the page supports it exactly: the same figure, for the same
 metric, the same PERIOD (year column) and the same SCOPE (consolidated / standalone / which segment).

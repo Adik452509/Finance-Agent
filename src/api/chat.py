@@ -54,9 +54,9 @@ def describe_update(node: str, update: dict) -> dict | None:
             "detail": detail, "warnings": update.get("warnings", [])}
 
 
-def answer_record(final: dict) -> dict:
+def answer_record(final: dict, extra_usage: dict | None = None) -> dict:
     """What gets saved with the assistant's message: enough to redraw every tab later."""
-    usage = final.get("usage") or {}
+    usage = {**(final.get("usage") or {}), **(extra_usage or {})}
     return {
         "content": final.get("report") or "",
         "citations": final.get("citations") or {},

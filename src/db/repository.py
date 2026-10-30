@@ -113,6 +113,12 @@ def list_messages(db: Session, user_id: str, conversation_id: str) -> list[Messa
     return list(db.scalars(query))
 
 
+def set_standalone_question(db: Session, message_id: str, text: str) -> None:
+    message = db.get(Message, message_id)
+    if message is not None:
+        message.standalone_question = text
+
+
 def recent_turns(db: Session, conversation_id: str, limit: int = 6) -> list[tuple[str, str]]:
     """The last few (role, text) pairs, oldest first: context for rewriting a follow-up (6.4)."""
     query = (select(Message.role, Message.standalone_question, Message.content)
@@ -145,7 +151,7 @@ def check_quota(db: Session, user: User, today: date | None = None) -> tuple[boo
 
 
 def record_question(db: Session, user_id: str, tokens: int, today: date | None = None) -> None:
-    """Count one answered question (cached answers count too: the quota is about fairness)."""
+    """Count one researched question (the API skips cached answers: they cost no tokens)."""
     day = today or _today()
     row = db.get(Usage, (user_id, day))
     if row is None:
