@@ -17,7 +17,7 @@ from config.settings import settings  # noqa: E402
 from frontend import components, notes  # noqa: E402
 from frontend.api_client import ApiError, BackendDown  # noqa: E402
 from frontend.session import api, identity, open_conversation  # noqa: E402
-from frontend.views import admin, library, research, signin  # noqa: E402
+from frontend.views import admin, library, research, signin, snapshot  # noqa: E402
 
 st.set_page_config(page_title="Research Desk · Financial Research Agent", page_icon=":material/query_stats:",
                    layout="wide", initial_sidebar_state="auto")  # auto: collapsed on phones
@@ -91,12 +91,15 @@ def main() -> None:
     # header is light, so show only the mark there (seen live: the wordmark was invisible).
     st.logo(str(components.ASSETS / "logo.svg"), size="large", icon_image=str(components.ASSETS / "logo_mark.svg"))
     pages = [st.Page(research.page, title="Research", icon=":material/query_stats:", url_path="research", default=True),
+             st.Page(snapshot.page, title="Company snapshot", icon=":material/monitoring:", url_path="snapshot"),
              st.Page(library.page, title="Library", icon=":material/library_books:", url_path="library")]
     if profile["is_admin"]:
         pages.append(st.Page(admin.page, title="Admin", icon=":material/admin_panel_settings:", url_path="admin"))
     page = st.navigation(pages, position="sidebar")
     if st.session_state.pop("go_to_research", False) and page.url_path != "research":
         st.switch_page(pages[0])
+    if st.session_state.pop("go_to_snapshot", False) and page.url_path != "snapshot":
+        st.switch_page(pages[1])  # "Open company snapshot" under an answer
     sidebar(profile)
     page.run()
 

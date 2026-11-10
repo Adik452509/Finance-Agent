@@ -95,6 +95,24 @@ def conversation_header(conversation: dict) -> None:
                 refresh()
 
 
+def _open_snapshot(ticker: str) -> None:
+    st.session_state["snapshot_ticker"] = ticker
+    st.session_state["go_to_snapshot"] = True
+
+
+def snapshot_offer(question: str, message: dict) -> None:
+    """'Should I invest in X?' gets facts, not a verdict - and a way to the full picture of X."""
+    ticker = notes.plan_ticker(message.get("trace"))
+    if not notes.investment_intent(question) or not ticker:
+        return
+    with st.container(border=True):
+        st.markdown(f":material/balance: The desk can't tell you whether to invest - that depends on your goals and "
+                    f"risk. **{ticker}'s company snapshot** lays out growth, strengths, things to watch and questions "
+                    "to ask yourself.")
+        st.button("Open company snapshot", icon=":material/query_stats:", key=f"snap-{message['id']}",
+                  on_click=_open_snapshot, args=(ticker,))
+
+
 def history(conversation: dict) -> None:
     previous_user = None
     for message in conversation["messages"]:
@@ -106,6 +124,8 @@ def history(conversation: dict) -> None:
             seconds = notes.seconds_between(previous_user["created_at"], message["created_at"]) if previous_user else None
             with st.chat_message("assistant", avatar=":material/query_stats:"):
                 components.answer_card(message, seconds, on_feedback=_feedback)
+                if previous_user and message.get("status") != "error":
+                    snapshot_offer(previous_user["content"], message)
 
 
 def research(conversation_id: str, question: str) -> None:

@@ -231,4 +231,7 @@ Rules:
   against the source documents.
 - For a decrease write "fell by 21.46%" (no minus sign after "fell"), or "changed by -21.46%".
 - No investment advice or buy/sell/hold opinions. Be concise.
+- If the user asks whether to buy, sell, hold or invest, start with one sentence saying the desk cannot
+  tell them whether to invest (that depends on their goals and risk), then give the facts found, and end
+  by pointing them to the Company snapshot page for growth charts, strengths and things to watch.
 """

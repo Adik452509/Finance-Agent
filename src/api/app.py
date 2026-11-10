@@ -15,6 +15,7 @@ import asyncio
 import hmac
 import json
 import logging
+import re
 from collections.abc import Iterator
 from contextlib import asynccontextmanager, contextmanager
 from urllib.parse import unquote
@@ -34,6 +35,9 @@ from src.memory.cache_policy import cache_ttl
 from src.memory.followup import standalone_question
 
 logger = logging.getLogger(__name__)
+
+SNAPSHOT_TICKER_RE = re.compile(r"[A-Z0-9^][A-Z0-9.\-=]{0,19}")
+SNAPSHOT_TTL_SECONDS = 6 * 3600
 
 
 # --- dependencies -----------------------------------------------------------------------------
@@ -314,6 +318,32 @@ def create_app(team: Team | None = None, sessions: sessionmaker[Session] | None 
         return [schemas.CompanyOut(ticker=d.ticker, company=d.company, doc_type=d.doc_type,
                                    fiscal_year_end=d.fiscal_year_end, filed=d.filed, source=d.source)
                 for d in load_registry()]
+
+    @app.get("/companies/{ticker}/snapshot")
+    async def company_snapshot(ticker: str, request: Request, who: Caller = Depends(caller)) -> dict:
+        """Facts, charts data, strengths and things to watch for one company - no buy/sell call, no LLM tokens."""
+        from src.analysis.snapshot import fetch_snapshot
+        from src.ingestion.loader import load_registry
+
+        symbol = ticker.strip().upper()
+        if not SNAPSHOT_TICKER_RE.fullmatch(symbol):
+            raise HTTPException(422, "use a ticker with its exchange suffix, e.g. MSFT, RELIANCE.NS, 7203.T")
+        key = f"snapshot:{symbol}"
+        with database(request) as db:
+            user_in(db, who)
+            cached = repo.cache_get(db, key)
+        if cached is not None:
+            return cached
+        team_ = request.app.state.team
+        if not await team_.wait_ready(timeout=60):
+            raise HTTPException(503, "the data services are starting; try again in a minute")
+        try:
+            snapshot = await fetch_snapshot({t.name: t for t in team_.tools}, symbol, {d.ticker for d in load_registry()})
+        except (LookupError, ValueError) as e:
+            raise HTTPException(404, str(e)) from e
+        with database(request) as db:
+            repo.cache_put(db, key, snapshot, SNAPSHOT_TTL_SECONDS)  # statements change rarely; prices are labelled with a time
+        return snapshot
 
     @app.post("/admin/companies", response_model=schemas.JobOut, status_code=202)
     def add_company(body: schemas.AddCompany, request: Request, who: Caller = Depends(caller)):

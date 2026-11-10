@@ -150,6 +150,46 @@ def seconds_between(earlier, later) -> float | None:
         return None
 
 
+INVEST_RE = re.compile(
+    r"\b(should\s+i\s+(buy|sell|hold|invest|keep)|worth\s+(buying|investing|it)|good\s+(investment|buy|stock|time\s+to\s+buy)"
+    r"|(buy|sell|hold)\s+or\s+(buy|sell|hold)|is\s+it\s+(a\s+)?(good|right)\s+time"
+    r"|price\s+target|undervalued|overvalued)\b", re.I)
+
+
+def investment_intent(question: str) -> bool:
+    """'Should I invest in Reliance?' - the desk can't answer that, but the snapshot helps decide."""
+    return bool(INVEST_RE.search(question or ""))
+
+
+def plan_ticker(trace: dict | None) -> str | None:
+    """The company an answer researched: the first ticker in its plan (one company only)."""
+    tickers = [s["ticker"] for s in ((trace or {}).get("plan") or {}).get("steps") or [] if s.get("ticker")]
+    return tickers[0] if tickers and len(set(tickers)) == 1 else None
+
+
+def chart_scale(years: list[dict], currency: str) -> tuple[float, str]:
+    """(divisor, unit label) so chart amounts read like the KPI tiles: ₹ crore, or B / M of a currency."""
+    if currency == "INR":
+        return 1e7, "₹ crore"
+    biggest = max((abs(y.get("revenue") or 0) for y in years), default=0)
+    if biggest >= 1e11:
+        return 1e9, f"{currency} billions"
+    return 1e6, f"{currency} millions"
+
+
+def split_amount(value: str) -> tuple[str, str]:
+    """'331.84 B USD' -> ('331.84 B', 'USD'); '₹10,57,219 crore' -> ('₹10,57,219', 'crore'); '0.13×' stays whole."""
+    parts = NUMBER_UNIT_RE.match(value)
+    if not parts or not parts.group(2).strip() or parts.group(2).strip() == "×":
+        return value, ""
+    return parts.group(1).strip(), parts.group(2).strip()
+
+
+def md_escape(text: str) -> str:
+    """Text from the web (news titles) shown as plain words, not as Markdown or links."""
+    return re.sub(r"([\\`*_{}\[\]()#+\-.!|<>:~$])", r"\\\1", " ".join(str(text or "").split()))
+
+
 def verification(answer: dict) -> tuple[str, str, str]:
     """(label, icon, badge color) for an answer's verification state - always icon + words."""
     if answer.get("status") == "error":

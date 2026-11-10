@@ -133,6 +133,20 @@ class FakeApi:
         return [{"ticker": "AAPL", "company": "Apple Inc.", "doc_type": "10-K", "fiscal_year_end": "2025-09-27",
                  "filed": "", "source": ""}]
 
+    def snapshot(self, ticker):
+        from src.analysis.snapshot import build_snapshot
+
+        if ticker == "ZZZZ":
+            raise ApiError(404, "No annual statements for ZZZZ.")
+        rows = [{"fiscal_year_end": f"{y}-09-27", "revenue": r, "net_income": n, "operating_income": n * 1.2,
+                 "free_cash_flow": n * 0.9, "total_debt": 90e9, "shareholders_equity": 70e9}
+                for y, r, n in ((2025, 416e9, 112e9), (2024, 391e9, 94e9), (2023, 383e9, 97e9))]
+        quote = {"name": "Apple Inc.", "price": 268.1, "currency": "USD", "market_cap": 3.97e12, "trailing_pe": 36.0,
+                 "as_of": "2026-11-10T08:00:00+00:00"}
+        news = {"results": [{"title": "Apple [launches] *new* iPhone", "source": "example.com",
+                             "url": "https://example.com/a", "published_date": "2026-11-09"}]}
+        return build_snapshot(ticker, quote, {"ok": True, "currency": "USD", "years": rows}, news)
+
     def conversation(self, conversation_id):
         return {"id": "c1", "title": "Apple net margin", "created_at": "2026-10-30T09:00:00Z",
                 "updated_at": "2026-10-30T09:00:13Z", "messages": [
@@ -179,3 +193,85 @@ def test_an_answer_renders_as_a_research_note(app):
     assert [m.value for m in app.metric][:3] == ["26.92%", "416,161", "112,010"]
     assert [t.label for t in app.tabs] == ["Sources (1)", "Research trail", "Usage"]
     assert any("Checked against sources" in m.value for m in app.markdown)  # st.badge renders as markdown
+
+
+# --- company snapshot ------------------------------------------------------------------------------
+
+
+def test_investment_questions_are_recognised():
+    for question in ("Should I invest in Reliance?", "Is Apple a good investment right now?",
+                     "should i buy or sell TCS", "Is Toyota undervalued?", "Is it a good time to buy Microsoft?"):
+        assert notes.investment_intent(question), question
+    for question in ("How much did Microsoft invest in AI capex?", "What was Apple's revenue in 2025?"):
+        assert not notes.investment_intent(question), question
+
+
+def test_the_snapshot_offer_needs_one_company_in_the_plan():
+    one = {"plan": {"steps": [{"ticker": "AAPL"}, {"ticker": "AAPL"}, {"ticker": None}]}}
+    two = {"plan": {"steps": [{"ticker": "AAPL"}, {"ticker": "MSFT"}]}}
+    assert notes.plan_ticker(one) == "AAPL" and notes.plan_ticker(two) is None and notes.plan_ticker(None) is None
+
+
+def test_chart_units_match_how_the_company_reports():
+    assert notes.chart_scale([{"revenue": 9.8e12}], "INR") == (1e7, "₹ crore")
+    assert notes.chart_scale([{"revenue": 416e9}], "USD") == (1e9, "USD billions")
+    assert notes.chart_scale([{"revenue": 5e9}], "EUR") == (1e6, "EUR millions")
+
+
+def test_tile_amounts_split_into_number_and_unit():
+    assert notes.split_amount("331.84 B USD") == ("331.84 B", "USD")
+    assert notes.split_amount("₹10,57,219 crore") == ("₹10,57,219", "crore")
+    assert notes.split_amount("40.3%") == ("40.3%", "")
+    assert notes.split_amount("0.13×") == ("0.13×", "")
+    assert notes.split_amount("n/a") == ("n/a", "")
+
+
+def test_web_text_is_shown_as_plain_words():
+    assert notes.md_escape("Apple [launches] *new* iPhone") == r"Apple \[launches\] \*new\* iPhone"
+
+
+def test_the_snapshot_page_shows_facts_charts_and_both_sides(app):
+    app.session_state["snapshot_ticker"] = "AAPL"
+    app.session_state["go_to_snapshot"] = True
+    app.run()
+    assert not app.exception
+    assert app.title[0].value == "Company snapshot"
+    labels = [m.label for m in app.metric]
+    assert labels[:3] == ["Share price", "Market value", "P/E (last 12 months)"]
+    assert labels[3:7] == ["Revenue", "Net margin", "Free cash flow", "Debt / equity"]
+    subheaders = [s.value for s in app.subheader]
+    assert any("Strengths" in s for s in subheaders) and any("Things to watch" in s for s in subheaders)
+    text = " ".join(m.value for m in app.markdown)
+    assert "Revenue is growing" in text and "Questions to ask yourself" not in text  # questions are a subheader
+    assert r"Apple \[launches\] \*new\* iPhone" in text                             # the headline is escaped
+    assert any("not investment advice" in c.value for c in app.caption)
+    assert len(app.get("vega_lite_chart")) == 2
+
+
+def test_an_unknown_ticker_explains_itself(app):
+    app.session_state["snapshot_ticker"] = "ZZZZ"
+    app.session_state["go_to_snapshot"] = True
+    app.run()
+    assert not app.exception
+    assert "No annual statements for ZZZZ" in app.warning[0].value
+
+
+class InvestApi(FakeApi):
+    def conversation(self, conversation_id):
+        chat = super().conversation(conversation_id)
+        chat["messages"][0]["content"] = "Should I invest in Apple?"
+        chat["messages"][1]["trace"] = {**TRACE, "plan": {"steps": [{"kind": "filings", "ticker": "AAPL", "goal": "g"}]}}
+        return chat
+
+
+def test_should_i_invest_offers_the_snapshot_not_a_verdict(app, monkeypatch):
+    import frontend.session as session
+
+    monkeypatch.setattr(session, "ApiClient", InvestApi)
+    app.session_state["conversation_id"] = "c1"
+    app.run()
+    assert not app.exception
+    offer = next(b for b in app.button if b.label == "Open company snapshot")
+    offer.click().run()
+    assert not app.exception
+    assert app.title[0].value == "Company snapshot" and app.session_state["snapshot_ticker"] == "AAPL"

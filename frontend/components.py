@@ -37,6 +37,8 @@ CSS = """
 /* Streamlit keeps the previous page's elements on screen, faded ("stale"), until a run ends - and a
    research run lasts 10-60 s. The desk must not linger under the live research: hide its stale parts. */
 .st-key-desk [data-stale="true"] { display: none; }
+/* Company snapshot tiles: amounts like "₹10,57,219" must fit a quarter-width tile. */
+.st-key-kpis [data-testid="stMetricValue"] { font-size: 1.85rem; }
 [data-testid="stSidebar"] .stButton button { justify-content: flex-start; }
 [data-testid="stSidebar"] .stButton button p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>

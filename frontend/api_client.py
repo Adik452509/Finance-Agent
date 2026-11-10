@@ -99,6 +99,10 @@ class ApiClient:
     def companies(self) -> list[dict]:
         return self._call("GET", "/companies")
 
+    def snapshot(self, ticker: str) -> dict:
+        # The first build of a ticker reads Yahoo, news and the filings: allow it more time.
+        return self._call("GET", f"/companies/{quote(ticker, safe='')}/snapshot", timeout=90)
+
     def add_company(self, body: dict) -> dict:
         return self._call("POST", "/admin/companies", json=body)
 
