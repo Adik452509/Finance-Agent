@@ -285,6 +285,10 @@ def correction_brief(problems: list[tuple[int, str]]) -> str:
     if any("another company's filing" in m for _, m in problems):
         hints.append("Only use passages from this step's company. If search_filings has no annual report for it, "
                      "write NOT FOUND for the filings figures - never use another company's figures.")
+    if any("not the column for the year claimed" in m for _, m in problems):
+        hints.append("Tables list several years side by side (and some notes stack one block per year): find the "
+                     "column or block headed with the requested year and take the figure from there - the "
+                     "consolidated statement of profit and loss shows both years in one row.")
     if any("source check" in m for _, m in problems):
         hints.append("Read the table header to find the column for the requested segment and year, and take the "
                      "figure from that exact column and row.")
@@ -319,6 +323,81 @@ def _segment_column_warnings(claim: str, source: str) -> list[str]:
                                 f"last ('Total') column ({columns[-1]}); a company total is usually the last column")
                 break
     return warnings
+
+
+# "2024-25" (an Indian fiscal year: ends in 2025), "FY2025", "2025", "fiscal year ended 2025-03-31".
+YEAR_TOKEN_RE = re.compile(r"(?<!\d)((?:19|20)\d{2})(?:\s*[-–]\s*(\d{2}))?(?!\d)")
+
+
+def year_tokens(text: str) -> list[int]:
+    """Fiscal years named in text, in order; "2024-25" counts as 2025 (the year it ends)."""
+    years = []
+    for start, suffix in YEAR_TOKEN_RE.findall(text):
+        year = int(start)
+        if suffix and int(suffix) == (year + 1) % 100:
+            year += 1  # "2024-25" - but not the "-03" of a date like 2025-03-31
+        years.append(year)
+    return years
+
+
+def table_rows(text: str):
+    """(row numbers, header years) for each table row of a page.
+
+    The header is the latest run of years before the row: one line ("Notes 2024-25 2023-24") or
+    one year per line (Apple: "September 27, / 2025 / September 28, / 2024 / ...").
+    """
+    header, pending = [], []
+    for line in text.splitlines():
+        numbers = _big_numbers(line)
+        if numbers:
+            if len(pending) >= 2:
+                header = pending
+            pending = []
+            yield numbers, header
+            continue
+        years = year_tokens(line)
+        if len(years) >= 2:
+            pending = years
+        elif years:
+            pending.append(years[0])
+
+
+def year_column_problems(facts: str, passages: dict[str, str]) -> list[tuple[int, str]]:
+    """A figure taken from another year's column of a multi-year table.
+
+    Seen in the eval (2026-11-10): Reliance's owners' profit "69,621" (the 2023-24 column) was
+    published as 2024-25. The cited page held it in a stacked 2023-24 block whose year heading had
+    fallen into another chunk, so every check - page check, LLM verifier, critic - passed it. The
+    profit statement retrieved in the same step shows it plainly: "Owners of the Company 69,648
+    69,621" under "2024-25 2023-24". So every page of the step is read, not just the cited one:
+    a figure that sits only in other years' columns, and never in the claimed year's, is flagged.
+    """
+    problems = []
+    for i, line in enumerate(facts.splitlines()):
+        if not SOURCE_TAG_RE.search(line) or line.lstrip("- ").startswith(("UNVERIFIED", "NOT FOUND")):
+            continue
+        claim = SOURCE_TAG_RE.sub("", line)
+        claimed = set(year_tokens(claim))
+        if len(claimed) != 1:
+            continue  # no period, or several: nothing exact to compare
+        claimed_year = claimed.pop()
+        for figure in _big_numbers(claim):
+            other_years, in_claimed_year = set(), False
+            for text in passages.values():
+                for numbers, header in table_rows(text):
+                    if len(header) != len(numbers):
+                        continue  # can't tell which column is which year
+                    for position, number in enumerate(numbers):
+                        if _digits(number) == _digits(figure):
+                            if header[position] == claimed_year:
+                                in_claimed_year = True
+                            else:
+                                other_years.add(header[position])
+            if other_years and not in_claimed_year:
+                found = ", ".join(f"FY{y}" for y in sorted(other_years))
+                problems.append((i, f"researcher: {figure} is in the {found} column of the tables retrieved, "
+                                    f"not the column for the year claimed (FY{claimed_year})"))
+    return problems
 
 
 def format_findings(findings: list[dict]) -> str:
@@ -443,7 +522,7 @@ def make_researcher(llm: BaseChatModel, tools: list[BaseTool], max_rounds: int =
                     continue
                 facts = result.text or "- NOT FOUND: the researcher returned no notes"
                 problems = (company_problems(facts, step.get("ticker")) + untagged_problems(facts, step["kind"])
-                            + fact_problems(facts, passages))
+                            + fact_problems(facts, passages) + year_column_problems(facts, passages))
                 if not problems and verifier is not None:  # code checks first: free, and they catch the obvious
                     problems, used, notes = await source_check(verifier, facts, passages)
                     verifier_tokens += used

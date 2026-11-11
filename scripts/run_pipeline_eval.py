@@ -44,12 +44,14 @@ RESULTS = settings.data_dir / "cache" / "pipeline_eval_last.json"
 
 async def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--only", default="", help="run only question ids starting with this prefix")
+    parser.add_argument("--only", default="", help="run only question ids starting with this prefix "
+                                                   "(several prefixes: comma-separated)")
     parser.add_argument("--all-reasoning", action="store_true", help="put every agent on the stronger model")
     parser.add_argument("--delay", type=float, default=20.0, help="seconds between questions (8k tokens/minute limit)")
     args = parser.parse_args()
 
-    questions = [q for q in json.loads(QUESTIONS.read_text(encoding="utf-8"))["questions"] if q["id"].startswith(args.only)]
+    prefixes = tuple(p.strip() for p in args.only.split(",")) if args.only else ("",)
+    questions = [q for q in json.loads(QUESTIONS.read_text(encoding="utf-8"))["questions"] if q["id"].startswith(prefixes)]
     if not questions:
         console.print(f"[red]No questions match --only {args.only!r}[/red]")
         return 1
@@ -69,11 +71,12 @@ async def main() -> int:
                 final = await graph.ainvoke({"question": q["question"]})
             except Exception as e:
                 rows.append({"id": q["id"], "passed": False, "failures": [f"{type(e).__name__}: {str(e)[:200]}"],
-                             "notes": [], "tokens": 0, "seconds": round(time.monotonic() - t0),
+                             "outcome": "failed", "notes": [], "tokens": 0, "seconds": round(time.monotonic() - t0),
                              "wrong_figure": False, "critic": {"outcome": "not run"}})
                 continue
             result = check_result(q["expect"], final)
-            rows.append({"id": q["id"], "passed": result.passed, "failures": result.failures, "notes": result.notes,
+            rows.append({"id": q["id"], "passed": result.passed, "outcome": result.outcome,
+                         "failures": result.failures, "notes": result.notes,
                          "tokens": sum((final.get("usage") or {}).values()), "seconds": round(time.monotonic() - t0),
                          "route": final.get("route"), "wrong_figure": result.wrong_figure, "critic": result.critic,
                          "critic_tokens": (final.get("usage") or {}).get("critic", 0),
@@ -97,13 +100,19 @@ def render(rows: list[dict], all_reasoning: bool, seconds: float) -> None:
         detail = "; ".join(r["failures"]) or ("; ".join(r["notes"]) if r["notes"] else "")
         c = r["critic"]
         critic_cell = c["outcome"] + (f" ({c['revisions']} rev)" if c.get("revisions") else "")
-        table.add_row(r["id"], "[green]PASS[/green]" if r["passed"] else "[red]FAIL[/red]", critic_cell,
+        outcome = r.get("outcome") or ("correct" if r["passed"] else "failed")
+        style = {"correct": "green", "refused": "yellow", "wrong": "red"}.get(outcome, "red")
+        table.add_row(r["id"], f"[{style}]{outcome.upper()}[/{style}]", critic_cell,
                       f"{r['tokens']:,}", f"{r['seconds']}s", escape(detail))
     console.print(table)
 
     passed = sum(r["passed"] for r in rows)
     outcomes = [r["critic"]["outcome"] for r in rows]
-    console.print(f"\nPassed: {passed}/{len(rows)}   Tokens: {sum(r['tokens'] for r in rows):,} "
+    results = [r.get("outcome") or ("correct" if r["passed"] else "failed") for r in rows]
+    console.print(f"\nOf {len(rows)}: {results.count('correct')} correct, {results.count('refused')} honestly refused, "
+                  f"{results.count('wrong')} wrong" + (f", {results.count('failed')} failed otherwise"
+                                                       if results.count("failed") else ""))
+    console.print(f"Passed: {passed}/{len(rows)}   Tokens: {sum(r['tokens'] for r in rows):,} "
                   f"(critic {sum(r.get('critic_tokens', 0) for r in rows):,})   Time: {seconds:.0f}s")
     console.print(f"Critic: {outcomes.count('first draft')} passed first draft, {outcomes.count('fixed')} fixed by "
                   f"revision, {outcomes.count('unresolved')} unresolved (verification note), "

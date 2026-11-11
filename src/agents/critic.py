@@ -21,7 +21,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from src.agents.citations import SOURCE_ID_RE
-from src.agents.nodes import format_findings
+from src.agents.nodes import format_findings, year_tokens
 from src.agents.prompts import CRITIC_PROMPT
 from src.agents.state import PlanError, ResearchState, extract_json
 from src.agents.toolloop import count_tokens
@@ -80,9 +80,43 @@ def _claim(line: str) -> str:
     return " ".join(line.strip().lstrip("-*• ").split())[:140]
 
 
+# A line that says a period is NOT covered may name it ("figures for fiscal 2031 are not available").
+GAP_RE = re.compile(r"not (?:yet )?(?:available|found|reported|published|covered|disclosed)|no (?:data|figures)|"
+                    r"could not|cannot|has not|have not|does not|do not|isn't|aren't|unavailable", re.I)
+
+
+def period_issues(draft: str, findings: list[dict], analysis: str) -> list[dict]:
+    """The draft names a year that none of the evidence covers.
+
+    Seen in the eval (2026-11-10): asked for Apple's growth "in fiscal 2031" (a year that has not
+    happened), the team found FY2025 vs FY2024, computed 6.43% correctly - and the draft called it
+    "fiscal 2031". Every figure was sourced, so no figure check could see it. A year counts as
+    covered if it, or a neighbouring year, appears in a fact note (an Indian "2024-25" ends in 2025);
+    NOT FOUND lines are not evidence - they name exactly the periods that are missing.
+    """
+    evidence = [line for f in findings for line in (f.get("facts") or "").splitlines()
+                if "NOT FOUND" not in line.upper()] + (analysis or "").splitlines()
+    covered = {y for line in evidence for y in year_tokens(line)}
+    if not covered:
+        return []
+    issues, reported = [], set()
+    for line in draft.splitlines():
+        if GAP_RE.search(line):
+            continue
+        for year in year_tokens(SOURCE_TAG_RE.sub(" ", line)):
+            if year in reported or any(abs(year - c) <= 1 for c in covered):
+                continue
+            reported.add(year)
+            issues.append({"claim": _claim(line), "problem": f"the draft names {year}, but no fact note covers {year} "
+                           f"(the evidence covers {', '.join(str(y) for y in sorted(covered))})",
+                           "fix": f"never relabel another period's figures as {year}: say that figures for {year} are "
+                                  "not available, and give the periods the evidence does cover", "source": "code"})
+    return issues
+
+
 def code_checks(draft: str, findings: list[dict], analysis: str, citations: dict[str, str]) -> list[dict]:
     """Layer 1: deterministic checks of the draft against the fact notes and analysis."""
-    issues: list[dict] = []
+    issues: list[dict] = period_issues(draft, findings, analysis)
     allowed, unverified = _evidence(findings, analysis or "")
     lines = [line for line in draft.splitlines() if line.strip()]
 

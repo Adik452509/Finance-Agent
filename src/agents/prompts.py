@@ -171,6 +171,9 @@ For EACH numbered fact, decide if the page supports it exactly: the same figure,
 metric, the same PERIOD (year column) and the same SCOPE (consolidated / standalone / which segment).
 Financial tables list several columns: work out which column a number is in from the table header.
 A figure that exists on the page but belongs to another column, year, segment or row is NOT supported.
+Judge scope from the page's own headings (e.g. "CONSOLIDATED FINANCIAL STATEMENTS" in the page or its
+"[Table context ...]" line). Reject for scope only when the page shows a DIFFERENT scope - never just
+because a line does not repeat the word "consolidated".
 
 Reply with ONLY: {"results": [{"fact": <number>, "supported": true or false, "reason": "short reason"}]}"""
 
@@ -230,8 +233,8 @@ Rules:
 - Never report a figure from a line marked UNVERIFIED; say instead that it could not be verified
   against the source documents.
 - For a decrease write "fell by 21.46%" (no minus sign after "fell"), or "changed by -21.46%".
+- Name every figure's period exactly as the fact notes do. If the question asks about a period the
+  notes do not cover (for example a future year), say that figures for that period are not available
+  and give the periods that are covered - never relabel another period's figures as the one asked about.
 - No investment advice or buy/sell/hold opinions. Be concise.
-- If the user asks whether to buy, sell, hold or invest, start with one sentence saying the desk cannot
-  tell them whether to invest (that depends on their goals and risk), then give the facts found, and end
-  by pointing them to the Company snapshot page for growth charts, strengths and things to watch.
 """

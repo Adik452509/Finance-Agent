@@ -12,6 +12,8 @@ REFUSAL_PHRASES = ("not found", "couldn't find", "could not find", "not availabl
                    "not included", "not in the", "does not contain", "do not contain", "unavailable",
                    "no information", "not reported", "not provided", "could not be verified",
                    "could not verify", "cannot be determined", "could not be determined")
+# A reported figure: a percentage or a number with 3+ digits / decimals (not a bare year).
+FIGURE_RE = re.compile(r"\d+(?:\.\d+)?\s?%|\b\d{1,3}(?:,\d{2,3})+(?:\.\d+)?\b|\b\d+\.\d+\b")
 # (site, date) - the writer sometimes wraps the site in <angle brackets> (seen live).
 NEWS_CITATION_RE = re.compile(r"\(<?[a-z0-9.-]+\.[a-z]{2,}>?,\s*[^)]*\d{4}[^)]*\)", re.I)
 
@@ -23,6 +25,7 @@ class CheckResult:
     notes: list[str] = field(default_factory=list)
     wrong_figure: bool = False                          # a known-wrong figure reached the report
     critic: dict = field(default_factory=dict)          # see critic_metrics()
+    outcome: str = ""                                   # "correct" / "refused" / "wrong" / "failed"
 
 
 def critic_metrics(final: dict) -> dict:
@@ -90,8 +93,13 @@ def check_result(expect: dict, final: dict) -> CheckResult:
     if route and final.get("route") != route:
         failures.append(f"route was {final.get('route')!r}, expected {route!r}")
 
-    if expect.get("refusal") and not any(p in report.lower() for p in REFUSAL_PHRASES):
+    refused = any(p in report.lower() for p in REFUSAL_PHRASES)
+    if expect.get("refusal") and not refused:
         failures.append("expected the report to say the information is not available")
+        # Seen in the eval: "Apple's revenue grew 6.43% in fiscal 2031" - a question with no expected
+        # figure answered with figures anyway is a wrong answer, not just a missing phrase.
+        if FIGURE_RE.search(report):
+            wrong_figure = True
 
     if expect.get("cites_news") and not NEWS_CITATION_RE.search(report):
         failures.append("news items are not cited as (site, date)")
@@ -102,5 +110,8 @@ def check_result(expect: dict, final: dict) -> CheckResult:
     warnings = final.get("warnings", [])
     if warnings:
         notes.append(f"{len(warnings)} warning(s): " + " | ".join(w[:90] for w in warnings))
+    # The three outcomes a reader cares about: right, honestly unanswered, or wrong.
+    outcome = ("correct" if not failures else "wrong" if wrong_figure
+               else "refused" if refused else "failed")
     return CheckResult(passed=not failures, failures=failures, notes=notes,
-                       wrong_figure=wrong_figure, critic=critic_metrics(final))
+                       wrong_figure=wrong_figure, critic=critic_metrics(final), outcome=outcome)

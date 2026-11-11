@@ -597,3 +597,77 @@ def test_tool_sets_do_not_overlap_and_format_findings():
     assert not RESEARCH_TOOLS & CALC_TOOLS
     assert "Step 1 (filings): Revenue" in format_findings([{"step_id": 1, "kind": "filings", "goal": "Revenue", "facts": FACTS}])
     assert format_findings([]) == "(no fact notes)"
+
+
+# --- year columns (eval 2026-11-10: Reliance's 2023-24 owners' profit published as 2024-25) ---------
+
+from src.agents.nodes import year_column_problems, year_tokens  # noqa: E402
+
+RIL_P100 = """CONSOLIDATED FINANCIAL STATEMENTS
+(₹ in crore)
+Notes 2024-25 2023-24
+Revenue from Operations 25 9,80,136 9,14,472
+Profit for the year 81,309 79,020
+Consolidated Statement of Profit and Loss
+For the year ended 31st March, 2025
+(₹ in crore)
+Notes 2024-25 2023-24
+Net Profit Attributable to:
+a) Owners of the Company 69,648 69,621
+b) Non-Controlling Interest 11,661 9,399"""
+# The stacked 2023-24 block of the segment note: its year heading fell into another chunk.
+RIL_P130 = """[Table context from top of page: CONSOLIDATED FINANCIAL STATEMENTS (₹ in crore) No. Particulars 2024-25 2023-24]
+Revenue from Operations
+(Net of GST)
+5,43,907 24,331 2,73,131 1,13,175 69,296 - 9,14,472
+Profit after Tax (after adjustment
+for Non-Controlling Interest)
+69,621"""
+AAPL_P32 = """CONSOLIDATED STATEMENTS OF OPERATIONS
+Years ended
+September 27,
+2025
+September 28,
+2024
+September 30,
+2023
+Total net sales 416,161 391,035 383,285
+Net income $ 112,010 $ 93,736 $ 96,995"""
+TOY_P164 = """Yen in millions
+2024 2025 2026
+Sales revenues 45,095,325 48,036,704 50,684,952"""
+PAGES = {"RELIANCE.NS p100": RIL_P100, "RELIANCE.NS p130": RIL_P130}
+
+
+def test_year_tokens_read_indian_and_western_fiscal_years():
+    assert year_tokens("2024-25 and FY2025, year ended 2025-03-31, March 31, 2024") == [2025, 2025, 2025, 2024]
+
+
+def test_a_figure_from_last_years_column_is_flagged_even_on_a_page_without_headings():
+    facts = "- Profit after tax attributable to owners (2024-25, consolidated): 69,621 INR crore [RELIANCE.NS p130]"
+    problems = year_column_problems(facts, PAGES)
+    assert len(problems) == 1 and "FY2024 column" in problems[0][1] and "(FY2025)" in problems[0][1]
+
+
+def test_figures_in_the_right_column_pass():
+    facts = ("- Owners' profit (2024-25, consolidated): 69,648 INR crore [RELIANCE.NS p130]\n"
+             "- Profit for the year (2024-25, consolidated): 81,309 INR crore [RELIANCE.NS p100]\n"
+             "- Revenue from Operations (2023-24, consolidated): 9,14,472 INR crore [RELIANCE.NS p100]")
+    assert year_column_problems(facts, PAGES) == []
+
+
+def test_one_year_per_line_headers_and_oldest_first_tables():
+    apple = {"AAPL p32": AAPL_P32}
+    assert year_column_problems("- Net income (fiscal year ended 2025-09-27): 112,010 USD millions [AAPL p32]", apple) == []
+    assert year_column_problems("- Net income (fiscal year ended 2025-09-27): 93,736 USD millions [AAPL p32]", apple)
+    toyota = {"7203.T p164": TOY_P164}
+    assert year_column_problems("- Sales revenues (fiscal year ended March 31, 2025): 48,036,704 JPY millions "
+                                "[7203.T p164]", toyota) == []          # the MIDDLE column
+    assert year_column_problems("- Sales revenues (fiscal year ended March 31, 2025): 45,095,325 JPY millions "
+                                "[7203.T p164]", toyota)
+
+
+def test_lines_without_one_clear_year_are_not_judged():
+    facts = ("- Owners' profit (consolidated): 69,621 INR crore [RELIANCE.NS p130]\n"
+             "- Owners' profit (2024-25 and 2023-24): 69,648 and 69,621 INR crore [RELIANCE.NS p100]")
+    assert year_column_problems(facts, PAGES) == []

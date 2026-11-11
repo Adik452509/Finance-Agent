@@ -185,3 +185,30 @@ def test_judge_failure_does_not_block_the_report():
 
 def test_critic_without_llm_uses_code_checks_only():
     assert run_critic(None)["critique"]["checked_by"] == ["code"]
+
+
+# --- periods (eval 2026-11-10: FY2025 growth published as "fiscal 2031") -----------------------------
+
+from src.agents.critic import period_issues  # noqa: E402
+
+APPLE_NOTES = [{"step_id": 1, "facts": "- Total net sales (fiscal year ended 2025-09-27): 416,161 USD millions [AAPL p32]\n"
+                                      "- Total net sales (fiscal year ended 2024-09-28): 391,035 USD millions [AAPL p32]\n"
+                                      "- NOT FOUND: total net sales for fiscal 2031"}]
+
+
+def test_a_year_the_evidence_does_not_cover_is_flagged():
+    draft = "Apple's revenue grew by 6.43% in fiscal 2031 (calculated from the figures above)."
+    issues = period_issues(draft, APPLE_NOTES, "- percent_change(391035, 416161) = 6.43%")
+    assert len(issues) == 1 and "2031" in issues[0]["problem"] and "not available" in issues[0]["fix"]
+    assert any("2031" in i["problem"] for i in code_checks(draft, APPLE_NOTES, "", {}))  # part of the code checks
+
+
+def test_saying_a_period_is_missing_is_fine_and_covered_years_pass():
+    draft = ("Figures for fiscal 2031 are not available.\n"
+             "- Revenue was 416,161 USD millions in fiscal 2025 [AAPL p32], up from fiscal 2024.")
+    assert period_issues(draft, APPLE_NOTES, "") == []
+
+
+def test_an_indian_fiscal_year_matches_its_end_date():
+    notes = [{"facts": "- Revenue (fiscal year ended 2025-03-31): 9,80,136 INR crore [RELIANCE.NS p100]"}]
+    assert period_issues("Revenue in FY 2024-25 was 9,80,136 crore [RELIANCE.NS p100].", notes, "") == []

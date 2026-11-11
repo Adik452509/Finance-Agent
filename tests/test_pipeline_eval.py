@@ -153,3 +153,19 @@ def test_new_phase5_questions_are_present():
 def test_empty_report_fails():
     r = check_result({"numbers": [], "must_not": [], "tools": [], "route": None}, {"report": "No report could be produced."})
     assert not r.passed
+
+
+def test_a_refusal_question_answered_with_figures_is_a_wrong_answer():
+    # Seen in the eval (2026-11-11): "grew by 6.43% in fiscal 2031" - the old counter said 0 wrong figures.
+    nf = next(q for q in QUESTIONS if q["id"] == "not_found_future_year")["expect"]
+    r = check_result(nf, final("Apple's revenue grew by 6.43% in fiscal 2031.", route="writer"))
+    assert r.wrong_figure is True and r.outcome == "wrong"
+    r = check_result(nf, final("Figures for fiscal 2031 are not available.", route="writer"))
+    assert r.outcome == "correct"
+
+
+def test_three_outcomes():
+    assert check_result(GROWTH, final("Grew 7.18%.", ("search_filings", "percent_change"))).outcome == "correct"
+    assert check_result(GROWTH, final("Revenue grew 48.11%.", ("search_filings", "percent_change"))).outcome == "wrong"
+    assert check_result(GROWTH, final("Revenue figures could not be verified.",
+                                      ("search_filings", "percent_change"))).outcome == "refused"
