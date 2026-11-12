@@ -82,7 +82,11 @@ async def main() -> int:
                          "critic_tokens": (final.get("usage") or {}).get("critic", 0),
                          "verifier_tokens": (final.get("usage") or {}).get("verifier", 0),
                          "warnings": final.get("warnings", []),
-                         "report": final.get("report", "")[:1500]})
+                         "report": final.get("report", "")[:1500],
+                         # The evidence behind the answer, so any result can be traced afterwards.
+                         "plan": final.get("plan"), "findings": final.get("findings", []),
+                         "tool_calls": [{k: c.get(k) for k in ("agent", "name", "args", "ok")}
+                                        for c in final.get("tool_calls", [])]})
 
     # Save first: a display bug must never throw away a run that cost ~150k tokens.
     RESULTS.parent.mkdir(parents=True, exist_ok=True)

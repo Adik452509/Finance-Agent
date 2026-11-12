@@ -285,6 +285,9 @@ def correction_brief(problems: list[tuple[int, str]]) -> str:
     if any("another company's filing" in m for _, m in problems):
         hints.append("Only use passages from this step's company. If search_filings has no annual report for it, "
                      "write NOT FOUND for the filings figures - never use another company's figures.")
+    if any("a separate row of the statement" in m for _, m in problems):
+        hints.append("Take the figure from the row whose name matches the line item asked for, word for word "
+                     "(e.g. 'Profit for the year', not 'Profit After Tax'), and label it with that row's name.")
     if any("not the column for the year claimed" in m for _, m in problems):
         hints.append("Tables list several years side by side (and some notes stack one block per year): find the "
                      "column or block headed with the requested year and take the figure from there - the "
@@ -340,26 +343,63 @@ def year_tokens(text: str) -> list[int]:
     return years
 
 
-def table_rows(text: str):
-    """(row numbers, header years) for each table row of a page.
+def _label_words(text: str) -> str:
+    """'a) Owners of the Company' -> 'owners of the company' (row labels compared word for word)."""
+    text = re.sub(r"^\s*(?:[a-z]|[ivx]+|\d+(?:\.\d+)?)[).]\s+", "", text.lower())  # "a)", "iv.", "26.1" prefixes
+    return " ".join(re.findall(r"[a-z]+", text))
+
+
+def parse_rows(text: str):
+    """(row label, row numbers, header years) for each table row of a page.
 
     The header is the latest run of years before the row: one line ("Notes 2024-25 2023-24") or
-    one year per line (Apple: "September 27, / 2025 / September 28, / 2024 / ...").
+    one year per line (Apple: "September 27, / 2025 / September 28, / 2024 / ..."). A label wrapped
+    over earlier lines is joined: Reliance p130 prints "Profit after Tax (after adjustment / for
+    Non-Controlling Interest)" on two lines and the figure alone on a third.
     """
-    header, pending = [], []
+    header, pending, waiting = [], [], []
     for line in text.splitlines():
         numbers = _big_numbers(line)
         if numbers:
             if len(pending) >= 2:
                 header = pending
             pending = []
-            yield numbers, header
+            before = line[:line.find(numbers[0])] if numbers[0] in line else ""
+            label = _label_words(before) or _label_words(" ".join(waiting))
+            waiting = []
+            yield label, numbers, header
             continue
         years = year_tokens(line)
         if len(years) >= 2:
             pending = years
         elif years:
             pending.append(years[0])
+        if line.strip() and not line.lstrip().startswith("[Table context"):
+            waiting = (waiting + [line.strip()])[-3:]
+
+
+def table_rows(text: str):
+    """(row numbers, header years) for each table row of a page."""
+    for _, numbers, header in parse_rows(text):
+        yield numbers, header
+
+
+def labelled_rows(text: str):
+    """(row label, row numbers) for each table row of a page."""
+    for label, numbers, _ in parse_rows(text):
+        yield label, numbers
+
+
+def _in_year(numbers: list[str], header: list[int], year: int | None) -> str | None:
+    """The row's figure in that year's column, when the header says which column that is."""
+    if year is None or len(header) != len(numbers) or header.count(year) != 1:
+        return None
+    return numbers[header.index(year)]
+
+
+def _claimed_year(claim: str) -> int | None:
+    years = set(year_tokens(claim))
+    return years.pop() if len(years) == 1 else None
 
 
 def year_column_problems(facts: str, passages: dict[str, str]) -> list[tuple[int, str]]:
@@ -371,20 +411,21 @@ def year_column_problems(facts: str, passages: dict[str, str]) -> list[tuple[int
     profit statement retrieved in the same step shows it plainly: "Owners of the Company 69,648
     69,621" under "2024-25 2023-24". So every page of the step is read, not just the cited one:
     a figure that sits only in other years' columns, and never in the claimed year's, is flagged.
+    The message names the figure in the claimed year's column of the same row, read by code, so the
+    retry has something exact to copy (seen live: told only "wrong column", it took 69,621 again).
     """
     problems = []
     for i, line in enumerate(facts.splitlines()):
         if not SOURCE_TAG_RE.search(line) or line.lstrip("- ").startswith(("UNVERIFIED", "NOT FOUND")):
             continue
         claim = SOURCE_TAG_RE.sub("", line)
-        claimed = set(year_tokens(claim))
-        if len(claimed) != 1:
+        claimed_year = _claimed_year(claim)
+        if claimed_year is None:
             continue  # no period, or several: nothing exact to compare
-        claimed_year = claimed.pop()
         for figure in _big_numbers(claim):
-            other_years, in_claimed_year = set(), False
-            for text in passages.values():
-                for numbers, header in table_rows(text):
+            other_years, in_claimed_year, instead = set(), False, None
+            for source_id, text in passages.items():
+                for _, numbers, header in parse_rows(text):
                     if len(header) != len(numbers):
                         continue  # can't tell which column is which year
                     for position, number in enumerate(numbers):
@@ -393,10 +434,58 @@ def year_column_problems(facts: str, passages: dict[str, str]) -> list[tuple[int
                                 in_claimed_year = True
                             else:
                                 other_years.add(header[position])
+                                right = _in_year(numbers, header, claimed_year)
+                                instead = instead or (right and f"{right} [{source_id}]")
             if other_years and not in_claimed_year:
                 found = ", ".join(f"FY{y}" for y in sorted(other_years))
+                hint = f"; the same row's FY{claimed_year} column shows {instead}" if instead else ""
                 problems.append((i, f"researcher: {figure} is in the {found} column of the tables retrieved, "
-                                    f"not the column for the year claimed (FY{claimed_year})"))
+                                    f"not the column for the year claimed (FY{claimed_year}){hint}"))
+    return problems
+
+
+def line_item_problems(facts: str, passages: dict[str, str], question: str, goal: str = "") -> list[tuple[int, str]]:
+    """A figure from a different row than the line item the question names.
+
+    Seen in the eval (2026-11-11): asked for Reliance's "profit for the year", the researcher took
+    80,787 from the row "Profit After Tax" (before the share of associates' profit); the
+    statement's own row "Profit for the year" holds 81,309. Right page, right year, wrong row - every
+    other check passed it. Only row names that appear word for word in the question (at least two
+    words long) count, so a question that names no line item is never judged. The user's words come
+    first: the planner had rewritten "profit for the year" as "Profit after tax" (seen live), so the
+    step goal is used only when the question itself names no line item.
+    """
+    rows = [(label, numbers, header, source_id) for source_id, text in passages.items()
+            for label, numbers, header in parse_rows(text) if label]
+    wanted, asked_words = set(), ""
+    for asked in (question, goal):
+        asked_words = f" {_label_words(asked)} "
+        wanted = {label for label, *_ in rows if len(label.split()) >= 2 and f" {label} " in asked_words}
+        if wanted:
+            break
+    if not wanted:
+        return []
+    problems = []
+    for i, line in enumerate(facts.splitlines()):
+        if not SOURCE_TAG_RE.search(line) or line.lstrip("- ").startswith(("UNVERIFIED", "NOT FOUND")):
+            continue
+        claim = SOURCE_TAG_RE.sub("", line)
+        year = _claimed_year(claim)
+        for figure in _big_numbers(claim):
+            labels = {label for label, numbers, *_ in rows if _digits(figure) in {_digits(n) for n in numbers}}
+            if not labels or any(w in label for w in wanted for label in labels):
+                continue
+            # A segment table lists segments as rows ("Retail 2,86,972 ..."): a row the question names is fine.
+            if any(f" {label} " in asked_words for label in labels):
+                continue
+            row = sorted(labels, key=len)[-1]
+            names = " or ".join(f"'{w}'" for w in sorted(wanted))
+            # What the asked-for row holds in the claimed year, read by code: an exact target for the retry.
+            shows = [f"'{label}' shows {value} [{source_id}]" for label, numbers, header, source_id in rows
+                     if label in wanted and (value := _in_year(numbers, header, year))]
+            hint = f"; for FY{year} the row {shows[0]}" if shows else ""
+            problems.append((i, f"researcher: {figure} is on the row '{row}', but the question asks for "
+                                f"{names}, a separate row of the statement{hint}"))
     return problems
 
 
@@ -522,7 +611,8 @@ def make_researcher(llm: BaseChatModel, tools: list[BaseTool], max_rounds: int =
                     continue
                 facts = result.text or "- NOT FOUND: the researcher returned no notes"
                 problems = (company_problems(facts, step.get("ticker")) + untagged_problems(facts, step["kind"])
-                            + fact_problems(facts, passages) + year_column_problems(facts, passages))
+                            + fact_problems(facts, passages) + year_column_problems(facts, passages)
+                            + line_item_problems(facts, passages, state["question"], step["goal"]))
                 if not problems and verifier is not None:  # code checks first: free, and they catch the obvious
                     problems, used, notes = await source_check(verifier, facts, passages)
                     verifier_tokens += used

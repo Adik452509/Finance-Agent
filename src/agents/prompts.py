@@ -88,6 +88,9 @@ Rules:
   and name the line item the way that company's statements do: Indian reports say "Revenue from
   Operations" ("consolidated Revenue from Operations for 2024-25"); US 10-Ks say "Total revenue" or
   "Total net sales" ("consolidated Total revenue for fiscal 2026"); Toyota says "Sales revenues".
+- When the user names a line item, keep their exact words in the goal: "profit for the year" stays
+  "Profit for the year" - never swap it for a neighbouring line such as "Profit after tax" (a
+  statement lists both, with different amounts).
 - Never add a calculation step: set needs_calculation to true instead. Any growth, percentage,
   ratio, share, comparison or unit conversion needs calculation.
 - Ask for EVERY figure a calculation needs (e.g. revenue for BOTH years) in the research goals.

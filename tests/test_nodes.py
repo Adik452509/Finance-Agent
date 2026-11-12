@@ -671,3 +671,73 @@ def test_lines_without_one_clear_year_are_not_judged():
     facts = ("- Owners' profit (consolidated): 69,621 INR crore [RELIANCE.NS p130]\n"
              "- Owners' profit (2024-25 and 2023-24): 69,648 and 69,621 INR crore [RELIANCE.NS p100]")
     assert year_column_problems(facts, PAGES) == []
+
+
+# --- line items (eval 2026-11-11: "Profit After Tax" 80,787 given for "profit for the year" 81,309) -----
+
+from src.agents.nodes import line_item_problems  # noqa: E402
+
+RIL_PL = """Notes 2024-25 2023-24
+Value of Sales & Services (Revenue) 10,71,174 10,00,122
+Revenue from Operations 25 9,80,136 9,14,472
+Profit After Tax 80,787 78,633
+Share of Profit / (Loss) of Associates and Joint Ventures 522 387
+Profit for the year 81,309 79,020"""
+RIL_SEGMENTS = """Segment Revenue from Operations (2024-25)
+O2C 6,05,006
+Retail 2,86,972"""
+RIL_NOTE = """Profit after Tax (before adjustment
+for Non-Controlling Interest)
+80,787"""
+STATEMENTS = {"RELIANCE.NS p100": RIL_PL, "RELIANCE.NS p116": RIL_SEGMENTS, "RELIANCE.NS p130": RIL_NOTE}
+PROFIT_Q = "What was Reliance's consolidated profit for the year 2024-25? | consolidated Profit for the year 2024-25"
+
+
+def test_a_figure_from_a_different_row_than_the_one_asked_for_is_flagged():
+    facts = "- Consolidated profit after tax (2024-25, consolidated): 80,787 INR crore [RELIANCE.NS p100]"
+    problems = line_item_problems(facts, STATEMENTS, PROFIT_Q)
+    assert len(problems) == 1 and "'profit for the year'" in problems[0][1]
+    right = "- Profit for the year (2024-25, consolidated): 81,309 INR crore [RELIANCE.NS p100]"
+    assert line_item_problems(right, STATEMENTS, PROFIT_Q) == []
+
+
+def test_value_of_sales_is_not_revenue_from_operations():
+    asked = "What share of Reliance's 2024-25 revenue from operations came from Retail? | consolidated Revenue from Operations"
+    assert line_item_problems("- Revenue from Operations (2024-25): 10,71,174 INR crore [RELIANCE.NS p100]",
+                              STATEMENTS, asked)
+    assert line_item_problems("- Revenue from Operations (2024-25): 9,80,136 INR crore [RELIANCE.NS p100]",
+                              STATEMENTS, asked) == []
+
+
+def test_segment_rows_named_in_the_question_and_unnamed_line_items_pass():
+    asked = "What share of revenue from operations came from the Retail segment? | Retail segment revenue from operations"
+    assert line_item_problems("- Retail segment revenue (2024-25): 2,86,972 INR crore [RELIANCE.NS p116]",
+                              STATEMENTS, asked) == []
+    vague = "How did Reliance do in 2024-25? | key results 2024-25"
+    assert line_item_problems("- Profit after tax (2024-25): 80,787 INR crore [RELIANCE.NS p100]", STATEMENTS, vague) == []
+
+
+def test_a_label_wrapped_over_several_lines_is_read_whole():
+    from src.agents.nodes import labelled_rows
+
+    assert list(labelled_rows(RIL_NOTE)) == [("profit after tax before adjustment for non controlling interest", ["80,787"])]
+
+
+def test_corrections_name_the_right_figure_read_by_code():
+    # Seen live: told only "wrong column", the retry took 69,621 again. Now it is told what to take.
+    year = year_column_problems("- Owners' profit (2024-25, consolidated): 69,621 INR crore [RELIANCE.NS p130]", PAGES)
+    assert "the same row's FY2025 column shows 69,648 [RELIANCE.NS p100]" in year[0][1]
+    row = line_item_problems("- Profit after tax (2024-25, consolidated): 80,787 INR crore [RELIANCE.NS p100]",
+                             STATEMENTS, PROFIT_Q)
+    assert "for FY2025 the row 'profit for the year' shows 81,309 [RELIANCE.NS p100]" in row[0][1]
+
+
+def test_the_users_words_beat_the_planners_rewording():
+    # Seen live: the planner turned "profit for the year" into the goal "consolidated Profit after tax".
+    facts = "- Profit after tax (fiscal year ended 2025-03-31, consolidated): 80,787 INR crore [RELIANCE.NS p100]"
+    question = "What was Reliance's consolidated profit for the year 2024-25?"
+    problems = line_item_problems(facts, STATEMENTS, question, "consolidated Profit after tax for 2024-25")
+    assert problems and "shows 81,309" in problems[0][1]
+    # A question that names no line item falls back to the step goal.
+    assert line_item_problems(facts, STATEMENTS, "How did Reliance do in 2024-25?",
+                              "consolidated Profit for the year 2024-25")
