@@ -169,3 +169,11 @@ def test_three_outcomes():
     assert check_result(GROWTH, final("Revenue grew 48.11%.", ("search_filings", "percent_change"))).outcome == "wrong"
     assert check_result(GROWTH, final("Revenue figures could not be verified.",
                                       ("search_filings", "percent_change"))).outcome == "refused"
+
+
+def test_the_same_amount_in_another_scale_matches():
+    # Seen in the 2026-11-13 eval: the right Toyota revenue in raw yen was scored as "missing".
+    assert has_number("48,036,704,000,000 JPY (48.04 T JPY)", "48,036,704")    # JPY millions vs raw yen
+    assert has_number("9,80,13,60,00,000 INR", "9,80,136")                       # crore vs raw rupees
+    assert not has_number("48,036,704,000,001 JPY", "48,036,704")
+    assert not has_number("revenue grew 718%", "7.18")                          # never for small or decimal figures

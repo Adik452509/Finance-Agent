@@ -741,3 +741,14 @@ def test_the_users_words_beat_the_planners_rewording():
     # A question that names no line item falls back to the step goal.
     assert line_item_problems(facts, STATEMENTS, "How did Reliance do in 2024-25?",
                               "consolidated Profit for the year 2024-25")
+
+
+def test_a_switched_off_source_falls_back_to_the_indexed_annual_report():
+    # Seen in the 2026-11-13 eval: EDINET off -> Toyota went to Yahoo although its annual report was indexed.
+    from src.agents.nodes import fallback_unavailable
+
+    plan = {"steps": [{"id": 1, "kind": "edinet", "ticker": "7203.T", "goal": "operating income FY2025 and FY2026"},
+                      {"id": 2, "kind": "edinet", "ticker": "6758.T", "goal": "Sony revenue"}]}
+    plan, notes = fallback_unavailable(plan, {"edinet"}, {"7203.T", "AAPL"})
+    assert [s["kind"] for s in plan["steps"]] == ["filings", "market"]      # Sony has no indexed report
+    assert "indexed annual report" in notes[0] and "market data" in notes[1]

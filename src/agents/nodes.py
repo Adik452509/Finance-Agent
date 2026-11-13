@@ -73,12 +73,25 @@ def unavailable_kinds(tools: list[BaseTool]) -> set[str]:
     return {kind for kind, tool in KIND_MAIN_TOOL.items() if tool not in names}
 
 
-def fallback_unavailable(plan: dict, unavailable: set[str]) -> tuple[dict, list[str]]:
+def fallback_unavailable(plan: dict, unavailable: set[str], known: set[str] | None = None) -> tuple[dict, list[str]]:
+    """Move steps for a switched-off source to one that works.
+
+    A company whose annual report is indexed goes to that report, which is official and cited to
+    the page. Seen in the eval (2026-11-13): the planner chose EDINET for Toyota, EDINET is off,
+    and the step fell back to Yahoo market data although Toyota's annual report was in the library.
+    """
+    known_bases = {_base_ticker(t) for t in known or set()}
     notes = []
     for step in plan["steps"]:
         if step["kind"] in unavailable:
-            notes.append(f"planner: {step['kind']} data is not available; step {step['id']} uses market data")
-            step["kind"] = KIND_FALLBACK[step["kind"]]
+            ticker = step.get("ticker")
+            if ticker and _base_ticker(ticker) in known_bases:
+                notes.append(f"planner: {step['kind']} data is not available; step {step['id']} uses {ticker}'s "
+                             "indexed annual report")
+                step["kind"] = "filings"
+            else:
+                notes.append(f"planner: {step['kind']} data is not available; step {step['id']} uses market data")
+                step["kind"] = KIND_FALLBACK[step["kind"]]
     return plan, notes
 
 
@@ -532,7 +545,7 @@ def make_planner(llm: BaseChatModel, companies: str | None = None, known_tickers
                     plan = fallback_plan(question)
                     warnings.append(f"planner failed twice ({e}); using a one-step fallback plan")
         plan_dict, notes = reroute_unindexed(plan.model_dump(), known)
-        plan_dict, more = fallback_unavailable(plan_dict, unavailable or set())
+        plan_dict, more = fallback_unavailable(plan_dict, unavailable or set(), known)
         return {"plan": plan_dict, "warnings": warnings + notes + more, "usage": {"planner": tokens}}
 
     return planner

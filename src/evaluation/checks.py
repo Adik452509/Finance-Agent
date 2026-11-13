@@ -60,7 +60,12 @@ def has_number(text: str, number: str) -> bool:
     """
     flat = text.replace(",", "").replace(" ", "").replace(" ", "")
     target = Decimal(number.replace(",", ""))
-    return any(Decimal(token) == target for token in re.findall(r"\d+(?:\.\d+)?", flat))
+    # The same AMOUNT in a different scale also matches: "48,036,704" (JPY millions, as the annual
+    # report prints it) == "48,036,704,000,000 JPY" (raw, as market data gives it) - seen in the
+    # 2026-11-13 eval. Only for whole amounts of 4+ digits, never for percentages or small numbers.
+    scaled = ({target * 10**k for k in (3, 6, 7, 9)} if target == target.to_integral_value() and target >= 1000
+              else set())
+    return any(Decimal(token) == target or Decimal(token) in scaled for token in re.findall(r"\d+(?:\.\d+)?", flat))
 
 
 def check_result(expect: dict, final: dict) -> CheckResult:
