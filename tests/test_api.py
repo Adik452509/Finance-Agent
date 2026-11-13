@@ -123,7 +123,7 @@ def test_me_creates_the_user_and_shows_the_quota(client, monkeypatch):
     monkeypatch.setattr(api.settings, "daily_question_quota", 3)
     me = client.get("/me", headers=ALICE).json()
     assert me == {"email": "alice@example.com", "name": "Alice Sørensen", "is_admin": False,
-                  "questions_left_today": 3, "daily_quota": 3}
+                  "questions_left_today": 3, "daily_quota": 3, "research_open": True}
 
 
 # --- conversations ------------------------------------------------------------------------------
@@ -340,3 +340,91 @@ def test_progress_lines_are_readable():
     assert describe_update("unknown_node", {}) is None
     record = answer_record(FINAL)
     assert record["tokens"] == 9900 and record["trace"]["route"] == "analyst"
+
+
+# --- the limits: counted when asked, and a shared daily budget (review 2026-11-13) -----------------------
+
+
+def test_questions_sent_at_the_same_time_cannot_slip_under_the_daily_limit(tmp_path, monkeypatch):
+    # Before: the question was counted only once its answer was saved, so every question sent while
+    # the first was still being researched passed the check.
+    import threading
+
+    monkeypatch.setattr(api.settings, "internal_api_token", None)
+    monkeypatch.setattr(api.settings, "daily_question_quota", 1)
+    slow, _ = make_client(tmp_path, delay=0.8)
+    with slow:
+        chat = slow.post("/conversations", json={}, headers=ALICE).json()
+        first: dict = {}
+        thread = threading.Thread(target=lambda: first.update(status=ask(slow, chat["id"])[0]))
+        thread.start()
+        time.sleep(0.3)                                        # the first question is being researched
+        assert slow.get("/me", headers=ALICE).json()["questions_left_today"] == 0   # already counted
+        status, body = ask(slow, chat["id"], question="A second question, sent meanwhile?")
+        thread.join(timeout=20)
+        assert status == 429 and b"Daily limit of 1" in body
+        assert first["status"] == 200 and len(slow.graphs[0].researched) == 1
+
+
+def test_the_shared_daily_budget_pauses_new_research_but_not_reused_answers(client, monkeypatch):
+    monkeypatch.setattr(api.settings, "daily_token_budget", 15_000)   # each fake answer costs 9,900 tokens
+    monkeypatch.setattr(api.settings, "admin_emails", "bob@example.com")
+    chat = client.post("/conversations", json={}, headers=ALICE).json()
+    ask(client, chat["id"], question="What was Apple's net income in fiscal 2025?")      # 9,900 spent
+    assert client.get("/me", headers=ALICE).json()["research_open"] is True
+    ask(client, chat["id"], question="What was Apple's revenue in fiscal 2025?")         # 19,800: over
+    assert client.get("/me", headers=ALICE).json()["research_open"] is False
+
+    _, events = ask(client, chat["id"], question="What was Toyota's revenue in fiscal 2026?")
+    assert any(e["type"] == "error" and "shared research budget" in e["text"] for e in events)
+    assert events[-1]["message"]["status"] == "error"
+    assert len(client.graphs[0].researched) == 2                                          # no third run
+    assert client.get("/me", headers=ALICE).json()["questions_left_today"] == 8          # the refusal was free
+
+    _, events = ask(client, chat["id"], question="What was Apple's net income in fiscal 2025?")
+    assert events[-1]["message"]["from_cache"] is True                                    # reused answers still open
+
+    other = client.post("/conversations", json={}, headers=BOB).json()                    # an admin is exempt
+    _, events = ask(client, other["id"], question="What was Toyota's revenue in fiscal 2026?", headers=BOB)
+    assert events[-1]["message"]["status"] == "ok" and len(client.graphs[0].researched) == 3
+    status = client.get("/status", headers=BOB).json()
+    assert status["tokens_today"] == 29_700 and status["questions_today"] == 3 and status["daily_token_budget"] == 15_000
+
+
+def test_no_shared_cap_when_the_budget_is_zero(client, monkeypatch):
+    monkeypatch.setattr(api.settings, "daily_token_budget", 0)
+    chat = client.post("/conversations", json={}, headers=ALICE).json()
+    for year in (2023, 2024, 2025):
+        _, events = ask(client, chat["id"], question=f"What was Apple's net income in fiscal {year}?")
+        assert events[-1]["message"]["status"] == "ok"
+    assert client.get("/me", headers=ALICE).json()["research_open"] is True
+
+
+def test_a_run_that_produces_no_report_is_a_failure_not_an_answer(client, monkeypatch):
+    # Seen live (2026-11-13, invalid API key): every agent failed and reported it as a warning, the
+    # run "finished", and "No report could be produced." was saved as a normal answer that cost the
+    # user one of their daily questions.
+    monkeypatch.setitem(FINAL, "report", "No report could be produced.\n\nThis is an automated research summary.")
+    monkeypatch.setitem(FINAL, "warnings", ["planner failed (the model's daily token budget is used up); using a "
+                                            "one-step fallback plan", "writer failed: the model's daily token budget is used up"])
+    chat = client.post("/conversations", json={}, headers=ALICE).json()
+    _, events = ask(client, chat["id"])
+    answer = events[-1]["message"]
+    assert answer["status"] == "error" and answer["content"] == "Today's AI budget is used up. Please try again tomorrow."
+    assert any(e["type"] == "error" for e in events)
+    assert answer["trace"]["plan"] and "daily token budget" in answer["trace"]["error"]   # the trail is kept
+    me = client.get("/me", headers=ALICE).json()
+    assert me["questions_left_today"] == 10                                              # free for the user
+    assert client.get("/status", headers=ALICE).json()["tokens_today"] == 9_900          # but the spend is counted
+    ask(client, chat["id"])
+    assert len(client.graphs[0].researched) == 2                                          # and it was never cached
+
+
+def test_error_messages_do_not_show_provider_internals():
+    from src.api.chat import NoReport, friendly_error
+
+    broken_key = NoReport({"warnings": ["planner failed (AuthenticationError: Error code: 401 - {'error': {'message': "
+                                        "'Invalid API Key'}}); using a one-step fallback plan"]})
+    assert friendly_error(broken_key).startswith("The AI service is not available right now")
+    assert "401" not in friendly_error(broken_key) and "API Key" not in friendly_error(broken_key)
+    assert "could not be completed" in friendly_error(NoReport({"warnings": []}))

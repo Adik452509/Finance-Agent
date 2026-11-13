@@ -97,10 +97,32 @@ async def run_question(team: Team, question: str, emit: Emit, timeout: float) ->
     return await asyncio.wait_for(go(), timeout)
 
 
+class NoReport(RuntimeError):
+    """The team ran but wrote nothing: every agent that mattered failed (and reported it as a warning).
+
+    Seen live (2026-11-13, an invalid API key): each agent catches its own error so one bad step
+    cannot crash a report - which also meant a run where EVERYTHING failed ended as a normal
+    "No report could be produced." answer, saved as fine and counted against the user's daily limit.
+    """
+
+    def __init__(self, final: dict) -> None:
+        warnings = [str(w) for w in final.get("warnings") or []]
+        failed = [w for w in warnings if "failed" in w]
+        # The most telling cause first: a spent daily budget explains every other failure.
+        reason = next((w for w in warnings if "daily token budget" in w), failed[0] if failed else "the team produced no report")
+        super().__init__(reason)
+        self.final = final
+
+
 def friendly_error(error: Exception) -> str:
     if isinstance(error, asyncio.TimeoutError):
         return "The research took too long and was stopped. Please try again or ask a narrower question."
     text = describe_error(error)
     if "daily token budget" in text:
         return "Today's AI budget is used up. Please try again tomorrow."
+    if "AuthenticationError" in text or "Invalid API Key" in text or "Error code: 401" in text:
+        # A configuration problem on our side: the raw provider message is of no use to a user.
+        return "The AI service is not available right now (a configuration problem on our side). Please try again later."
+    if isinstance(error, NoReport):
+        return "Sorry, the research could not be completed, so there is no answer to show. Please try again."
     return f"Sorry, the research failed ({text}). Please try again."

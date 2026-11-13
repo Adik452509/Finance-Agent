@@ -248,3 +248,29 @@ def test_migration_builds_exactly_the_models_schema_and_can_be_undone(tmp_path):
     command.downgrade(config, "base")
     assert set(inspect(engine).get_table_names()) <= {"alembic_version"}
     engine.dispose()
+
+
+def test_a_question_is_counted_when_asked_and_handed_back_if_it_fails(db, two_users, monkeypatch):
+    monkeypatch.setattr(repo.settings, "daily_question_quota", 2)
+    alice, bob = two_users
+    day = date(2026, 11, 13)
+    assert repo.reserve_question(db, alice, day) == (True, 1)
+    assert repo.reserve_question(db, alice, day) == (True, 0)
+    assert repo.reserve_question(db, alice, day) == (False, 0)       # the third is refused, and not counted
+    assert repo.usage_today(db, alice.id, day) == (2, 0)
+    repo.release_question(db, alice.id, day)                          # one of them failed: free again
+    assert repo.check_quota(db, alice, day) == (True, 1)
+    repo.add_tokens(db, alice.id, 12_000, day)                        # the other was answered
+    assert repo.usage_today(db, alice.id, day) == (1, 12_000)
+    repo.release_question(db, bob.id, day)                            # nothing reserved: nothing to give back
+    assert repo.usage_today(db, bob.id, day) == (0, 0)
+
+
+def test_the_shared_budget_adds_up_every_user(db, two_users):
+    alice, bob = two_users
+    day = date(2026, 11, 13)
+    assert repo.usage_total(db, day) == (0, 0)
+    repo.record_question(db, alice.id, tokens=15_000, today=day)
+    repo.record_question(db, bob.id, tokens=9_000, today=day)
+    repo.record_question(db, bob.id, tokens=1_000, today=day + timedelta(days=1))
+    assert repo.usage_total(db, day) == (2, 24_000)

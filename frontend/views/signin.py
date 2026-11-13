@@ -16,7 +16,8 @@ def page() -> None:
         st.title("Research Desk")
         st.markdown("<span class='desk-muted'>Research listed companies from their annual reports, official SEC "
                     "filings and live market data. A team of AI analysts plans the work, calculates with a real "
-                    "calculator and checks every figure against its source.</span>", unsafe_allow_html=True)
+                    "calculator, checks annual-report figures against the page they cite, and reviews every "
+                    "answer before you see it.</span>", unsafe_allow_html=True)
         st.space("small")
         with st.container(border=True):
             st.markdown(":material/verified: **Every figure cited** to its page, filing or data source")

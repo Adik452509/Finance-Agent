@@ -93,7 +93,12 @@ class Settings(BaseSettings):
     # Where the filings library lives: "local" = Chroma folder + config/documents.json (laptop);
     # "postgres" = pgvector + the documents table in DATABASE_URL (deployed: survives restarts).
     filings_store: Literal["local", "postgres"] = "local"
-    daily_question_quota: int = 10  # per user per day: the shared Groq budget is the real limit
+    daily_question_quota: int = 10  # per user per day
+    # Tokens ALL users together may spend on research per UTC day; once reached, new research pauses
+    # until midnight UTC (reused answers still open, admins are exempt). 0 = no cap. The default
+    # fits Groq's free tier: 200k tokens a day per model, and a 12-question evaluation used 197k
+    # across both models. Raise it on a paid plan - there it is a cost limit.
+    daily_token_budget: int = 180_000
     admin_emails: str = ""          # comma-separated: these users get the admin page and no quota
 
     # --- Backend API (Phase 6.3) ---------------------------------------------
@@ -158,6 +163,8 @@ class Settings(BaseSettings):
         # A batch must fit at least one full chunk (plus its repeated header).
         if self.embed_chars_per_minute < self.chunk_size + 500:
             raise ValueError("EMBED_CHARS_PER_MINUTE must exceed CHUNK_SIZE + 500.")
+        if self.daily_token_budget < 0 or self.daily_question_quota < 0:
+            raise ValueError("DAILY_TOKEN_BUDGET and DAILY_QUESTION_QUOTA cannot be negative (0 = no shared cap).")
         if self.filings_store == "postgres" and not (self.database_url or "").startswith(("postgresql", "postgres")):
             raise ValueError("FILINGS_STORE=postgres needs DATABASE_URL to be a Postgres URL.")
         if self.app_env == "production" and len(self.internal_api_token or "") < 32:

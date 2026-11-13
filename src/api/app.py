@@ -26,7 +26,8 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from config.settings import settings
 from src.api import schemas
-from src.api.chat import answer_record, friendly_error, run_question
+from src.agents.nodes import NO_REPORT
+from src.api.chat import NoReport, answer_record, friendly_error, run_question
 from src.api.team import Team
 from src.api.worker import job_worker
 from src.db import repository as repo
@@ -97,10 +98,31 @@ def _progress(agent: str, label: str, text: str) -> dict:
     return {"type": "progress", "agent": agent, "label": label, "text": text, "detail": [], "warnings": []}
 
 
+BUDGET_MESSAGE = ("Today's shared research budget is used up, so new research is paused until midnight UTC. "
+                  "Questions that were answered recently still open instantly.")
+
+
+class BudgetExhausted(RuntimeError):
+    """All users together have spent today's token budget (settings.daily_token_budget)."""
+
+
+def research_open(db: Session, user) -> bool:
+    """May this user start NEW research now? Admins always; others while the shared budget lasts."""
+    if user.is_admin or not settings.daily_token_budget:
+        return True
+    return repo.usage_total(db)[1] < settings.daily_token_budget
+
+
 async def produce_answer(app: FastAPI, user_id: str, conversation_id: str, question_id: str, question: str,
-                         turns: list[tuple[str, str]], emit) -> None:
-    """Background task: understand, answer (from cache or research), save, then close the stream."""
+                         turns: list[tuple[str, str]], emit, day=None, capped: bool = False) -> None:
+    """Background task: understand, answer (from cache or research), save, then close the stream.
+
+    The question was already counted against the user's daily limit when it was asked (`day`);
+    here it is either kept (researched: its tokens are added) or handed back (failed, or reused).
+    `capped`: this user's new research stops once the shared daily token budget is spent.
+    """
     state = app.state
+    day = day or repo.today()
     record, status, counts = None, "ok", True
     try:
         # 1. A follow-up ("and in 2024?") becomes a standalone question, using the chat history.
@@ -120,7 +142,13 @@ async def produce_answer(app: FastAPI, user_id: str, conversation_id: str, quest
             counts = False
             emit(_progress("cache", "Cache", "Answered from a recent identical question (no new research needed)"))
         else:
-            # 3. Research it.
+            # 3. Research it - unless everyone together has already spent today's budget. Checked
+            # here, after the cache, so reused answers keep working on a day the budget is gone.
+            if capped:
+                with session_scope(state.sessions) as db:
+                    spent = repo.usage_total(db)[1]
+                if spent >= settings.daily_token_budget:
+                    raise BudgetExhausted(f"{spent:,} of {settings.daily_token_budget:,} tokens used today")
             if state.slots.locked():
                 emit({"type": "queued", "text": "Another question is being researched; yours is next."})
             async with state.slots:  # Groq's per-minute limit: only a few runs at a time
@@ -132,23 +160,39 @@ async def produce_answer(app: FastAPI, user_id: str, conversation_id: str, quest
                 finally:
                     state.active -= 1
             record = answer_record(final, extra_usage={"memory": memory_tokens} if memory_tokens else None)
-            if not record["content"]:
-                raise RuntimeError("the team produced no report")
+            if not record["content"] or record["content"].startswith(NO_REPORT):
+                raise NoReport(final)  # nothing to show: a failure (free for the user), not an answer
             if cacheable(final):
                 with session_scope(state.sessions) as db:
                     repo.cache_put(db, standalone, {k: record[k] for k in ("content", "citations", "trace")},
                                    cache_ttl(standalone))
+    except BudgetExhausted as e:  # expected on a busy day: no stack trace in the logs
+        logger.info("Shared daily budget reached: %s", e)
+        record, status = {"content": BUDGET_MESSAGE, "trace": {"error": f"daily token budget reached ({e})"}}, "error"
+        emit({"type": "error", "text": record["content"]})
     except Exception as e:
         logger.exception("Question failed")
-        record, status = {"content": friendly_error(e), "trace": {"error": f"{type(e).__name__}: {str(e)[:300]}"}}, "error"
+        # A run that produced no report still has a research trail (plan, warnings, tokens spent): keep it.
+        kept = answer_record(e.final) if isinstance(e, NoReport) else {"trace": {}}
+        record = {"content": friendly_error(e), "trace": {**kept["trace"], "error": f"{type(e).__name__}: {str(e)[:300]}"},
+                  **{k: kept[k] for k in ("usage", "tokens") if k in kept}}
+        status = "error"
         emit({"type": "error", "text": record["content"]})
+    try:
+        # Settle the question counted at ask time, in its own transaction: a problem saving the
+        # answer below must not leave a failed question counted against the user.
+        with session_scope(state.sessions) as db:
+            if not (status == "ok" and counts):
+                repo.release_question(db, user_id, day)  # failures and reused answers are free
+            if status == "error" or counts:  # tokens really spent count toward the shared budget, even on a failure
+                repo.add_tokens(db, user_id, record.get("tokens", 0), day)
+    except Exception:
+        logger.exception("Could not settle the question's quota")
     try:
         with session_scope(state.sessions) as db:
             conversation = repo.get_conversation(db, user_id, conversation_id)
             if conversation is not None:  # it may have been deleted while we worked
                 message = repo.add_message(db, conversation, "assistant", status=status, **record)
-                if status == "ok" and counts:
-                    repo.record_question(db, user_id, record.get("tokens", 0))  # failures and cache hits are free
                 emit({"type": "answer", "message": schemas.MessageOut.model_validate(message).model_dump(mode="json")})
     except Exception:
         logger.exception("Could not save the answer")
@@ -220,9 +264,14 @@ def create_app(team: Team | None = None, sessions: sessionmaker[Session] | None 
     @app.get("/status")
     async def status(request: Request, who: Caller = Depends(caller)) -> dict:
         team_ = request.app.state.team
+        with database(request) as db:
+            user_in(db, who)
+            questions_today, tokens_today = repo.usage_total(db)
         return {"team_ready": team_.ready, "team_error": team_.error, "unavailable_servers": team_.failed,
                 "tools": len(team_.tools), "filings_store": settings.filings_store,
-                "database": settings.masked_database_url(), "questions_running": request.app.state.active}
+                "database": settings.masked_database_url(), "questions_running": request.app.state.active,
+                "questions_today": questions_today, "tokens_today": tokens_today,
+                "daily_token_budget": settings.daily_token_budget}
 
     @app.get("/me", response_model=schemas.Me)
     def me(request: Request, who: Caller = Depends(caller)):
@@ -230,7 +279,8 @@ def create_app(team: Team | None = None, sessions: sessionmaker[Session] | None 
             user = user_in(db, who)
             _, left = repo.check_quota(db, user)
             return schemas.Me(email=user.email, name=user.name, is_admin=user.is_admin,
-                              questions_left_today=left, daily_quota=repo.quota_for(user))
+                              questions_left_today=left, daily_quota=repo.quota_for(user),
+                              research_open=research_open(db, user))
 
     # -- conversations --
 
@@ -278,7 +328,11 @@ def create_app(team: Team | None = None, sessions: sessionmaker[Session] | None 
             conversation_ = repo.get_conversation(db, user.id, conversation_id)
             if conversation_ is None:
                 raise HTTPException(404, "conversation not found")
-            allowed, _ = repo.check_quota(db, user)
+            # Count the question NOW, in the same step as the check: questions sent at the same
+            # moment can no longer all slip under the limit. produce_answer hands it back if the
+            # research fails or the answer is reused.
+            day = repo.today()
+            allowed, _ = repo.reserve_question(db, user, day)
             if not allowed:
                 raise HTTPException(429, f"Daily limit of {repo.quota_for(user)} questions reached. "
                                          "It resets at midnight UTC.")
@@ -286,10 +340,11 @@ def create_app(team: Team | None = None, sessions: sessionmaker[Session] | None 
             turns = repo.recent_turns(db, conversation_id)  # read BEFORE saving: the question is not its own context
             saved = repo.add_message(db, conversation_, "user", question)
             user_id, question_message = user.id, schemas.MessageOut.model_validate(saved).model_dump(mode="json")
+            capped = bool(settings.daily_token_budget) and not user.is_admin
 
         queue: asyncio.Queue = asyncio.Queue()
         task = asyncio.create_task(produce_answer(app_, user_id, conversation_id, saved.id, question, turns,
-                                                  queue.put_nowait))
+                                                  queue.put_nowait, day=day, capped=capped))
         app_.state.tasks.add(task)  # keep a reference: the task outlives this request if the client leaves
         task.add_done_callback(app_.state.tasks.discard)
 

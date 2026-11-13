@@ -764,6 +764,9 @@ def make_writer(llm: BaseChatModel):
     return writer
 
 
+NO_REPORT = "No report could be produced."  # what a run that produced nothing "reports"; the API treats it as a failure
+
+
 def finalize(state: ResearchState) -> dict:
     """Code only: expand citations, report what couldn't be verified, add the disclaimer."""
     draft = state.get("draft", "")
@@ -779,4 +782,4 @@ def finalize(state: ResearchState) -> dict:
         report += "\n\n**Verification note:** an automatic review could not confirm these points:\n" + "\n".join(
             f"- {i.get('claim', '')}: {i.get('problem', '')}" for i in issues)
         warnings.append(f"critic: {len(issues)} issue(s) remain after {state.get('revisions', 0)} revision(s)")
-    return {"report": with_disclaimer(report or "No report could be produced."), "warnings": warnings}
+    return {"report": with_disclaimer(report or NO_REPORT), "warnings": warnings}

@@ -12,7 +12,7 @@ import hashlib
 import re
 from datetime import date, datetime, timedelta, timezone
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from config.settings import settings
@@ -159,15 +159,67 @@ def check_quota(db: Session, user: User, today: date | None = None) -> tuple[boo
 
 
 def record_question(db: Session, user_id: str, tokens: int, today: date | None = None) -> None:
-    """Count one researched question (the API skips cached answers: they cost no tokens)."""
+    """Count one researched question and its tokens in one go (scripts and tests; the API reserves instead)."""
     day = today or _today()
-    row = db.get(Usage, (user_id, day))
-    if row is None:
-        row = Usage(user_id=user_id, day=day, questions=0, tokens=0)
-        db.add(row)
+    row = _usage_row(db, user_id, day)
     row.questions += 1
     row.tokens += max(int(tokens or 0), 0)
     db.flush()
+
+
+def today() -> date:
+    """The quota's "today": the UTC date."""
+    return _today()
+
+
+def _usage_row(db: Session, user_id: str, day: date, lock: bool = False) -> Usage:
+    # lock: SELECT ... FOR UPDATE on Postgres, so two backend processes can't both take the last
+    # question (SQLite ignores it; there one process handles requests one database step at a time).
+    row = db.get(Usage, (user_id, day), with_for_update=lock)
+    if row is None:
+        row = Usage(user_id=user_id, day=day, questions=0, tokens=0)
+        db.add(row)
+    return row
+
+
+def reserve_question(db: Session, user: User, day: date | None = None) -> tuple[bool, int]:
+    """Check the quota AND count the question, in one step, at the moment it is asked.
+
+    Returns (allowed, questions left afterwards). Counting only once the answer was saved let any
+    number of questions sent at the same time all pass the check (found in the 2026-11-13 review):
+    none of them had been counted yet. A question that fails, or is answered from the cache, is
+    handed back with release_question().
+    """
+    row = _usage_row(db, user.id, day or _today(), lock=True)
+    left = quota_for(user) - row.questions
+    if left <= 0:
+        return False, 0
+    row.questions += 1
+    db.flush()
+    return True, left - 1
+
+
+def release_question(db: Session, user_id: str, day: date) -> None:
+    """Give a reserved question back: it failed, or the answer was reused and cost nothing."""
+    row = db.get(Usage, (user_id, day), with_for_update=True)
+    if row is not None and row.questions > 0:
+        row.questions -= 1
+        db.flush()
+
+
+def add_tokens(db: Session, user_id: str, tokens: int, day: date) -> None:
+    """Add a finished answer's tokens to the user's day (the question itself was counted when asked)."""
+    row = _usage_row(db, user_id, day, lock=True)
+    row.tokens += max(int(tokens or 0), 0)
+    db.flush()
+
+
+def usage_total(db: Session, day: date | None = None) -> tuple[int, int]:
+    """(questions, tokens) of ALL users on one day: what the shared daily budget is measured against."""
+    questions, tokens = db.execute(
+        select(func.coalesce(func.sum(Usage.questions), 0), func.coalesce(func.sum(Usage.tokens), 0))
+        .where(Usage.day == (day or _today()))).one()
+    return int(questions), int(tokens)
 
 
 # --- answer cache -----------------------------------------------------------------------------------

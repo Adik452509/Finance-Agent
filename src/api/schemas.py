@@ -11,6 +11,7 @@ class Me(BaseModel):
     is_admin: bool
     questions_left_today: int
     daily_quota: int
+    research_open: bool = True  # False once all users together have spent today's shared token budget
 
 
 class ConversationOut(BaseModel):

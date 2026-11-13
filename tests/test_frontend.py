@@ -275,3 +275,53 @@ def test_should_i_invest_offers_the_snapshot_not_a_verdict(app, monkeypatch):
     offer.click().run()
     assert not app.exception
     assert app.title[0].value == "Company snapshot" and app.session_state["snapshot_ticker"] == "AAPL"
+
+
+class BudgetGoneApi(FakeApi):
+    def me(self):
+        return {**super().me(), "research_open": False}
+
+
+def test_a_spent_shared_budget_is_explained_and_the_question_box_stays_open(app, monkeypatch):
+    import frontend.session as session
+
+    monkeypatch.setattr(session, "ApiClient", BudgetGoneApi)
+    app.run()
+    assert not app.exception
+    assert any("shared research budget is used up" in i.value for i in app.info)
+    assert not app.chat_input[0].disabled       # reused answers still work, so asking stays possible
+
+
+class AdminApi(FakeApi):
+    def me(self):
+        return {**super().me(), "is_admin": True}
+
+    def status(self):
+        return {"team_ready": True, "team_error": None, "unavailable_servers": {}, "tools": 15,
+                "filings_store": "local", "questions_running": 0, "questions_today": 7, "tokens_today": 101_500,
+                "daily_token_budget": 180_000}
+
+    def jobs(self):
+        return []
+
+
+def _admin_page_script():
+    from frontend.views import admin
+
+    admin.page()
+
+
+def test_the_admin_page_shows_todays_shared_usage(monkeypatch):
+    from streamlit.testing.v1 import AppTest
+
+    import frontend.session as session
+    from config.settings import settings
+
+    monkeypatch.setattr(session, "ApiClient", AdminApi)
+    monkeypatch.setattr(settings, "google_oauth_client_id", None)
+    monkeypatch.setattr(settings, "app_env", "dev")
+    page = AppTest.from_function(_admin_page_script, default_timeout=30).run()
+    assert not page.exception
+    assert page.title[0].value == "Admin"
+    usage = next(c.value for c in page.caption if "all users" in c.value)
+    assert "7 questions" in usage and "101,500 of 180,000 shared tokens" in usage

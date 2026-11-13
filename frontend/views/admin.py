@@ -23,6 +23,11 @@ def system_status() -> None:
     columns[1].metric("Tools", status["tools"], border=True)
     columns[2].metric("Questions running", status["questions_running"], border=True)
     columns[3].metric("Filings store", status["filings_store"].capitalize(), border=True)
+    if "tokens_today" in status:
+        budget = status.get("daily_token_budget") or 0
+        spent = f"{status['tokens_today']:,} of {budget:,} shared tokens" if budget else f"{status['tokens_today']:,} tokens (no cap)"
+        st.caption(f":material/data_usage: Today, all users: {status.get('questions_today', 0)} questions · {spent} · "
+                   "resets at midnight UTC")
     if status.get("unavailable_servers"):
         st.caption("Unavailable data sources: " + ", ".join(f"{k} ({v[:60]})" for k, v in status["unavailable_servers"].items()))
     if status.get("team_error"):

@@ -46,8 +46,8 @@ def _desk() -> None:
         components.eyebrow("Financial research agent")
         st.title("What do you want to research?")
         st.markdown("<span class='desk-muted'>A team of AI analysts plans the research, reads annual reports and "
-                    "official filings, calculates with a real calculator and checks every figure against its source "
-                    "before you see it.</span>", unsafe_allow_html=True)
+                    "official filings, calculates with a real calculator, checks annual-report figures against the "
+                    "page they cite, and reviews every answer before you see it.</span>", unsafe_allow_html=True)
     st.space("small")
     companies = _companies()
     coverage = st.columns(3)
@@ -179,6 +179,10 @@ def page() -> None:
     if left <= 0:
         st.info("You've used today's questions. They reset at midnight UTC - previous research stays available.",
                 icon=":material/hourglass_empty:")
+    elif profile and profile.get("research_open") is False:
+        # Everyone shares one daily AI budget; the question box stays open because reused answers still work.
+        st.info("Today's shared research budget is used up, so new research is paused until midnight UTC. "
+                "Questions that were answered recently still open instantly.", icon=":material/hourglass_empty:")
     if question:
         if not conversation_id:
             conversation_id = api().new_conversation()["id"]

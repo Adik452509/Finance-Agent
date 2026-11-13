@@ -31,6 +31,7 @@ VARIABLES = {
     "ADMIN_EMAILS": "from .env",
     "PUBLIC_APP_URL": "the Space's direct address (below)",
     "ALLOWED_EMAILS": "optional: limit access (empty = any Google account you added as a test user)",
+    "DAILY_TOKEN_BUDGET": "optional: tokens all users may spend per day (default 180000 = Groq free tier; 0 = no cap)",
 }
 
 
